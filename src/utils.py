@@ -24,6 +24,28 @@ TFIDF_MAX_FEATURES = 5000
 TFIDF_NGRAM_RANGE = (1, 2)
 LOGISTIC_REGRESSION_MAX_ITER = 1000
 
+# SMOTE parameters for class imbalance handling
+SMOTE_RANDOM_STATE = 42
+SMOTE_K_NEIGHBORS = 5
+SMOTE_SAMPLING_STRATEGY = 'minority'
+
+# Cross-validation parameters
+CV_FOLDS = 5
+CV_RANDOM_STATE = 42
+
+# GridSearchCV parameters for Logistic Regression
+LR_PARAM_GRID = {
+    'C': [0.001, 0.01, 0.1, 1, 10, 100],
+    'class_weight': ['balanced', None],
+    'solver': ['lbfgs'],
+    'max_iter': [1000, 2000]
+}
+
+# GridSearchCV parameters for Naive Bayes
+NB_PARAM_GRID = {
+    'alpha': [0.001, 0.01, 0.1, 0.5, 1.0]
+}
+
 # Risk level thresholds (in percentages)
 RISK_LEVELS = {
     "Low": (0, 30),
