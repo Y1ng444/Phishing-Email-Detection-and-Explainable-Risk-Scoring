@@ -2,7 +2,8 @@
 
 import re
 import logging
-from typing import Tuple, List
+from typing import Tuple, List, Dict, Any
+from pathlib import Path
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -28,26 +29,197 @@ for resource in _NLTK_DOWNLOADS:
 LEMMATIZER = WordNetLemmatizer()
 STOP_WORDS = set(stopwords.words("english"))
 
+# Required columns for dataset validation
+REQUIRED_COLUMNS = {"text_combined", "label"}
 
-def load_dataset() -> Tuple[pd.DataFrame, int]:
-    """Load phishing email dataset.
+
+def _get_csv_files() -> List[Path]:
+    """Get all CSV files from data directory recursively.
 
     Returns:
-        Tuple of (dataframe, total_rows)
+        List of Path objects for all CSV files found
 
     Raises:
-        FileNotFoundError: If dataset file not found
+        FileNotFoundError: If data directory does not exist
     """
-    csv_path = DATA_DIR / "phishing_email.csv"
-    if not csv_path.exists():
-        logger.error(f"Dataset not found at {csv_path}")
-        raise FileNotFoundError(f"Dataset not found at {csv_path}")
+    if not DATA_DIR.exists():
+        logger.error(f"Data directory not found at {DATA_DIR}")
+        raise FileNotFoundError(f"Data directory not found at {DATA_DIR}")
 
-    logger.info(f"Loading dataset from {csv_path}")
-    df = pd.read_csv(csv_path)
-    logger.info(f"Dataset loaded: {df.shape[0]} rows, {df.shape[1]} columns")
+    csv_files = sorted(DATA_DIR.rglob("*.csv"))
+    logger.info(f"Found {len(csv_files)} CSV file(s) in {DATA_DIR}")
 
-    return df, df.shape[0]
+    return csv_files
+
+
+def _validate_csv(csv_path: Path) -> bool:
+    """Validate CSV file has required columns.
+
+    Args:
+        csv_path: Path to CSV file
+
+    Returns:
+        True if valid, False otherwise
+    """
+    try:
+        df = pd.read_csv(csv_path, nrows=1)
+        columns = set(df.columns)
+
+        if not REQUIRED_COLUMNS.issubset(columns):
+            logger.warning(
+                f"Skipping {csv_path.name}: Missing columns. "
+                f"Expected {REQUIRED_COLUMNS}, Found {columns}"
+            )
+            return False
+
+        return True
+
+    except Exception as e:
+        logger.warning(f"Skipping {csv_path.name}: Error reading file - {str(e)}")
+        return False
+
+
+def _load_single_csv(csv_path: Path) -> Tuple[pd.DataFrame, bool]:
+    """Load single CSV file with error handling.
+
+    Args:
+        csv_path: Path to CSV file
+
+    Returns:
+        Tuple of (dataframe or None, success_bool)
+    """
+    try:
+        df = pd.read_csv(csv_path)
+
+        # Select only required columns
+        df = df[["text_combined", "label"]].copy()
+
+        logger.info(f"Loaded {csv_path.name}: {df.shape[0]} rows")
+
+        return df, True
+
+    except Exception as e:
+        logger.warning(f"Error loading {csv_path.name}: {str(e)}")
+        return None, False
+
+
+def load_dataset() -> Tuple[pd.DataFrame, int]:
+    """Load and merge all labeled CSV files from data directory.
+
+    Automatically scans data/ folder recursively for all CSV files,
+    validates they contain required columns (text_combined, label),
+    merges them, removes duplicates, and handles missing values.
+
+    Returns:
+        Tuple of (merged_dataframe, total_rows_before_cleaning)
+
+    Raises:
+        FileNotFoundError: If data directory not found
+        ValueError: If no valid CSV files found
+    """
+    logger.info("=" * 70)
+    logger.info("LOADING DATASET: Multi-CSV Auto-Discovery")
+    logger.info("=" * 70)
+
+    # Get all CSV files
+    csv_files = _get_csv_files()
+
+    if not csv_files:
+        logger.error("No CSV files found in data directory")
+        raise FileNotFoundError(f"No CSV files found in {DATA_DIR}")
+
+    logger.info(f"\nFound {len(csv_files)} CSV file(s) to process:")
+    for csv_file in csv_files:
+        logger.info(f"  - {csv_file.name}")
+
+    # Validate CSV files
+    logger.info("\nValidating CSV files...")
+    valid_files = []
+    skipped_files = []
+
+    for csv_path in csv_files:
+        if _validate_csv(csv_path):
+            valid_files.append(csv_path)
+        else:
+            skipped_files.append(csv_path.name)
+
+    logger.info(f"Valid files: {len(valid_files)}, Skipped files: {len(skipped_files)}")
+
+    if not valid_files:
+        logger.error("No valid CSV files found with required columns")
+        raise ValueError(
+            f"No valid CSV files found. Required columns: {REQUIRED_COLUMNS}"
+        )
+
+    # Load valid CSV files
+    logger.info("\nLoading valid CSV files...")
+    dataframes = []
+    total_rows_before_cleaning = 0
+
+    for csv_path in valid_files:
+        df, success = _load_single_csv(csv_path)
+        if success:
+            dataframes.append(df)
+            total_rows_before_cleaning += df.shape[0]
+
+    if not dataframes:
+        logger.error("Failed to load any CSV files")
+        raise ValueError("Failed to load any CSV files")
+
+    # Merge all dataframes
+    logger.info(f"\nMerging {len(dataframes)} dataframe(s)...")
+    df = pd.concat(dataframes, ignore_index=True)
+    logger.info(f"After merge: {df.shape[0]} rows, {df.shape[1]} columns")
+
+    # Data cleaning and validation
+    logger.info("\nPerforming data cleaning and validation...")
+
+    # Count duplicates before removal
+    duplicate_count = df.duplicated(subset=["text_combined"]).sum()
+
+    # Remove duplicates
+    if duplicate_count > 0:
+        logger.info(f"Removing {duplicate_count} duplicate email(s)...")
+        df = df.drop_duplicates(subset=["text_combined"], keep="first")
+
+    # Count missing values before removal
+    missing_text = df["text_combined"].isnull().sum()
+    missing_label = df["label"].isnull().sum()
+
+    if missing_text > 0 or missing_label > 0:
+        logger.warning(
+            f"Found missing values: text_combined={missing_text}, label={missing_label}"
+        )
+        df = df.dropna(subset=["text_combined", "label"])
+        logger.info(f"After removing missing values: {df.shape[0]} rows")
+
+    # Convert text_combined to string
+    df["text_combined"] = df["text_combined"].astype(str)
+    df["label"] = df["label"].astype(int)
+
+    # Dataset statistics
+    logger.info("\n" + "=" * 70)
+    logger.info("DATASET STATISTICS")
+    logger.info("=" * 70)
+    logger.info(f"CSV files loaded:        {len(valid_files)}")
+    logger.info(f"CSV files skipped:       {len(skipped_files)}")
+    logger.info(f"Total rows (raw):        {total_rows_before_cleaning:,}")
+    logger.info(f"Total rows (cleaned):    {df.shape[0]:,}")
+    logger.info(f"Duplicates removed:      {duplicate_count:,}")
+    logger.info(f"Missing values removed:  {missing_text + missing_label:,}")
+    logger.info(f"Final dataset shape:     {df.shape}")
+
+    # Class distribution
+    logger.info(f"\nClass distribution:")
+    class_dist = df["label"].value_counts().sort_index()
+    for label, count in class_dist.items():
+        pct = (count / len(df)) * 100
+        label_name = "Ham" if label == 0 else "Phishing"
+        logger.info(f"  {label_name:10s} ({label}): {count:6,} ({pct:5.2f}%)")
+
+    logger.info("=" * 70 + "\n")
+
+    return df, total_rows_before_cleaning
 
 
 def explore_dataset(df: pd.DataFrame) -> None:
