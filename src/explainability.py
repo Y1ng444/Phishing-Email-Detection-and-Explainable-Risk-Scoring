@@ -1,282 +1,190 @@
-"""Explainability module for model interpretation."""
+"""Simple coefficient-based explanations for sklearn text pipelines."""
 
-import logging
+from __future__ import annotations
+
+from typing import Any
+
 import numpy as np
-import re
-from typing import Dict, List, Any, Tuple
-import joblib
+from scipy.sparse import hstack, issparse
+from sklearn.pipeline import Pipeline
 
-from .utils import setup_logger, MODELS_DIR
-from .preprocessing import clean_email, _count_urls
-from .feature_engineering import load_vectorizer
+from .text_cleaning import count_urls
+from .text_cleaning import clean_email_text
 
-logger = setup_logger(__name__)
+
+def _pipeline_parts(model_or_pipeline: Any):
+    """Return vectorizer and classifier from a sklearn Pipeline."""
+    if not isinstance(model_or_pipeline, Pipeline):
+        raise TypeError("Expected a sklearn Pipeline with 'tfidf' and 'clf' steps.")
+
+    try:
+        return model_or_pipeline.named_steps["tfidf"], model_or_pipeline.named_steps["clf"]
+    except KeyError as exc:
+        raise ValueError("Pipeline must contain 'tfidf' and 'clf' steps.") from exc
+
+
+def _get_coefficients(classifier: Any) -> np.ndarray:
+    """Return linear model coefficients for the positive class."""
+    if not hasattr(classifier, "coef_"):
+        raise ValueError("Explanation requires a linear model with coef_.")
+
+    coefficients = classifier.coef_
+    if coefficients.ndim == 2:
+        return coefficients[0]
+    return coefficients
+
+
+def get_feature_names(model_or_pipeline: Any, feature_names: list[str] | None = None) -> list[str]:
+    """Return TF-IDF feature names from a pipeline or supplied list."""
+    if feature_names is not None:
+        return list(feature_names)
+
+    vectorizer, _ = _pipeline_parts(model_or_pipeline)
+    return list(vectorizer.get_feature_names_out())
 
 
 def get_top_features(
-    model, feature_names: List[str], n: int = 20
-) -> Tuple[List[str], List[float]]:
-    """Extract top feature coefficients from logistic regression model.
+    model_or_pipeline: Any,
+    feature_names: list[str] | None = None,
+    n: int = 20,
+) -> tuple[list[str], list[float], list[str], list[float]]:
+    """Return top phishing and ham indicators from model coefficients."""
+    if isinstance(model_or_pipeline, Pipeline):
+        _, classifier = _pipeline_parts(model_or_pipeline)
+    else:
+        classifier = model_or_pipeline
 
-    Args:
-        model: Trained LogisticRegression model
-        feature_names: List of feature names
-        n: Number of top features to return
+    names = get_feature_names(model_or_pipeline, feature_names)
+    coefficients = _get_coefficients(classifier)
+    usable = min(len(names), len(coefficients))
+    names = names[:usable]
+    coefficients = coefficients[:usable]
 
-    Returns:
-        Tuple of (feature names, coefficients)
-    """
-    # Get coefficients for phishing class
-    coefficients = model.coef_[0]
-
-    # Get indices of top positive (phishing) indicators
     top_phishing_indices = np.argsort(coefficients)[-n:][::-1]
-
-    # Get indices of top negative (ham) indicators
     top_ham_indices = np.argsort(coefficients)[:n]
 
-    top_phishing_features = [feature_names[i] for i in top_phishing_indices]
-    top_phishing_coefs = [coefficients[i] for i in top_phishing_indices]
+    top_phishing = [names[i] for i in top_phishing_indices]
+    top_phishing_coefs = [float(coefficients[i]) for i in top_phishing_indices]
+    top_ham = [names[i] for i in top_ham_indices]
+    top_ham_coefs = [float(coefficients[i]) for i in top_ham_indices]
 
-    top_ham_features = [feature_names[i] for i in top_ham_indices]
-    top_ham_coefs = [coefficients[i] for i in top_ham_indices]
-
-    return (
-        top_phishing_features,
-        top_phishing_coefs,
-        top_ham_features,
-        top_ham_coefs,
-    )
-
-
-def display_feature_importance(
-    model, feature_names: List[str], n: int = 20
-) -> None:
-    """Display global feature importance from model.
-
-    Args:
-        model: Trained LogisticRegression model
-        feature_names: List of feature names
-        n: Number of top features to display
-    """
-    logger.info("\n" + "=" * 70)
-    logger.info("GLOBAL FEATURE IMPORTANCE (Logistic Regression)")
-    logger.info("=" * 70)
-
-    top_phishing, phishing_coefs, top_ham, ham_coefs = get_top_features(
-        model, feature_names, n
-    )
-
-    logger.info("\nTop 20 PHISHING INDICATORS (Strong Predictors):")
-    logger.info("-" * 70)
-    for i, (feature, coef) in enumerate(zip(top_phishing, phishing_coefs), 1):
-        logger.info(f"{i:2d}. {feature:<30} Coefficient: {coef:+.6f}")
-
-    logger.info("\nTop 20 HAM INDICATORS (Legitimate Email Markers):")
-    logger.info("-" * 70)
-    for i, (feature, coef) in enumerate(zip(top_ham, ham_coefs), 1):
-        logger.info(f"{i:2d}. {feature:<30} Coefficient: {coef:+.6f}")
-
-    logger.info("=" * 70)
-
-
-def extract_suspicious_keywords(
-    email_text: str, suspicious_words: List[str]
-) -> List[str]:
-    """Extract suspicious keywords from email.
-
-    Args:
-        email_text: Raw email text
-        suspicious_words: List of suspicious keywords to search for
-
-    Returns:
-        List of found suspicious keywords
-    """
-    email_lower = email_text.lower()
-    found_keywords = []
-
-    for keyword in suspicious_words:
-        # Use word boundary matching
-        pattern = r"\b" + re.escape(keyword) + r"\b"
-        if re.search(pattern, email_lower):
-            found_keywords.append(keyword)
-
-    return found_keywords
+    return top_phishing, top_phishing_coefs, top_ham, top_ham_coefs
 
 
 def get_email_explanation(
     email_text: str,
-    model,
-    vectorizer,
-    feature_names: List[str],
+    model_or_pipeline: Any,
+    vectorizer: Any | None = None,
+    feature_names: list[str] | None = None,
     top_n: int = 10,
-) -> Dict[str, Any]:
-    """Generate detailed explanation for a single email.
+) -> dict[str, Any]:
+    """Explain which active TF-IDF features drive one email prediction.
 
-    Args:
-        email_text: Raw email text
-        model: Trained model
-        vectorizer: TF-IDF vectorizer
-        feature_names: List of all feature names
-        top_n: Number of top contributing features to show
-
-    Returns:
-        Dictionary with explanation details
+    Preferred usage is ``get_email_explanation(email_text, pipeline)`` where the
+    pipeline contains ``tfidf`` and ``clf`` steps.
     """
-    # Clean email
-    cleaned_text = clean_email(email_text)
+    if isinstance(model_or_pipeline, Pipeline):
+        pipeline = model_or_pipeline
+        vectorizer, classifier = _pipeline_parts(pipeline)
+    else:
+        if vectorizer is None:
+            raise ValueError("A vectorizer is required when explaining a raw estimator.")
+        classifier = model_or_pipeline
 
-    # Transform to features
-    tfidf_matrix = vectorizer.transform([cleaned_text])
+    names = get_feature_names(model_or_pipeline if isinstance(model_or_pipeline, Pipeline) else vectorizer, feature_names)
+    transform_text = email_text if isinstance(model_or_pipeline, Pipeline) else clean_email_text(email_text)
+    matrix = vectorizer.transform([transform_text])
+    coefficients = _get_coefficients(classifier)
+    if not isinstance(model_or_pipeline, Pipeline) and matrix.shape[1] < len(coefficients):
+        try:
+            from .feature_engineering import create_statistical_features
 
-    from .feature_engineering import create_statistical_features
-    from scipy.sparse import hstack
+            stat_features, _ = create_statistical_features([email_text])
+            matrix = hstack([matrix, stat_features], format="csr")
+        except Exception:
+            pass
+    usable = min(matrix.shape[1], len(coefficients), len(names))
+    matrix = matrix[:, :usable]
+    coefficients = coefficients[:usable]
+    names = names[:usable]
 
-    stat_features, stat_feature_names = create_statistical_features([email_text])
-    X = hstack([tfidf_matrix, stat_features])
+    if hasattr(classifier, "predict_proba"):
+        probability = float(model_or_pipeline.predict_proba([email_text])[:, 1][0]) if isinstance(model_or_pipeline, Pipeline) else float(classifier.predict_proba(matrix)[:, 1][0])
+        score_type = "probability"
+        score = probability
+    elif isinstance(model_or_pipeline, Pipeline) and hasattr(model_or_pipeline, "decision_function"):
+        raw_score = float(model_or_pipeline.decision_function([email_text])[0])
+        probability = float(1.0 / (1.0 + np.exp(-raw_score)))
+        score_type = "decision_score"
+        score = raw_score
+    else:
+        probability = 0.0
+        score_type = "score"
+        score = 0.0
 
-    # Get prediction and probability
-    prediction = model.predict(X)[0]
-    probability = model.predict_proba(X)[0][1]
+    prediction = int(model_or_pipeline.predict([email_text])[0]) if isinstance(model_or_pipeline, Pipeline) else int(classifier.predict(matrix)[0])
 
-    # Get model coefficients
-    coefficients = model.coef_[0]
+    row = matrix.toarray()[0] if issparse(matrix) else np.asarray(matrix)[0]
+    contributions = row * coefficients
+    active_indices = np.flatnonzero(row)
+    active_sorted = active_indices[np.argsort(np.abs(contributions[active_indices]))[::-1]]
 
-    # Calculate feature contributions
-    # Convert to CSR format if needed for slicing
-    if X.format != 'csr':
-        X = X.tocsr()
+    top_active_features = [
+        {
+            "feature": names[index],
+            "tfidf_value": float(row[index]),
+            "coefficient": float(coefficients[index]),
+            "contribution": float(contributions[index]),
+            "direction": "phishing" if coefficients[index] > 0 else "ham",
+        }
+        for index in active_sorted[:top_n]
+    ]
 
-    # For sparse TF-IDF features
-    tfidf_dense = X[:, : len(feature_names) - len(stat_feature_names)].toarray()
-    tfidf_contributions = np.abs(
-        tfidf_dense[0] * coefficients[: len(feature_names) - len(stat_feature_names)]
+    top_phishing, phishing_coefs, top_ham, ham_coefs = get_top_features(
+        model_or_pipeline,
+        feature_names=names,
+        n=top_n,
     )
 
-    # For statistical features
-    stat_contributions = np.abs(
-        stat_features[0] * coefficients[len(feature_names) - len(stat_feature_names) :]
-    )
-
-    # Get top contributing TF-IDF features
-    top_tfidf_indices = np.argsort(tfidf_contributions)[-top_n:][::-1]
-    top_tfidf_features = [
-        (
-            feature_names[i],
-            tfidf_contributions[i],
-            coefficients[i],
-        )
-        for i in top_tfidf_indices
-        if tfidf_contributions[i] > 0
-    ]
-
-    # Get top contributing statistical features
-    top_stat_indices = np.argsort(stat_contributions)[-5:][::-1]
-    top_stat_features = [
-        (
-            stat_feature_names[i],
-            stat_contributions[i],
-            coefficients[len(feature_names) - len(stat_feature_names) + i],
-        )
-        for i in top_stat_indices
-        if stat_contributions[i] > 0
-    ]
-
-    # Extract suspicious keywords (sample list)
-    suspicious_keywords = [
-        "verify",
-        "confirm",
-        "click",
-        "urgent",
-        "action",
-        "update",
-        "suspended",
-        "limited",
-        "unusual",
-        "activity",
-    ]
-    found_keywords = extract_suspicious_keywords(email_text, suspicious_keywords)
-
-    # Get positive evidence (phishing indicators present)
-    positive_evidence = []
-    top_phishing, _, _, _ = get_top_features(model, feature_names, 20)
-    for feature in top_phishing:
-        if feature in cleaned_text or feature in email_text:
-            positive_evidence.append(feature)
-
-    # Get negative evidence (ham indicators present)
-    negative_evidence = []
-    _, _, top_ham, _ = get_top_features(model, feature_names, 20)
-    for feature in top_ham:
-        if feature in cleaned_text or feature in email_text:
-            negative_evidence.append(feature)
-
-    explanation = {
+    return {
         "prediction": "Phishing" if prediction == 1 else "Ham",
-        "probability": float(probability),
-        "risk_score": int(probability * 100),
-        "top_tfidf_features": top_tfidf_features,
-        "top_stat_features": top_stat_features,
-        "suspicious_keywords": found_keywords,
-        "positive_evidence": positive_evidence[:5],
-        "negative_evidence": negative_evidence[:5],
-        "total_features_active": int(np.sum(X[0] != 0)),
+        "probability": probability,
+        "score": score,
+        "score_type": score_type,
+        "risk_score": int(round(probability * 100)),
+        "top_active_features": top_active_features,
+        "top_phishing_indicators": list(zip(top_phishing, phishing_coefs)),
+        "top_ham_indicators": list(zip(top_ham, ham_coefs)),
         "email_length": len(email_text),
         "word_count": len(email_text.split()),
-        "url_count": _count_urls(email_text),
+        "url_count": count_urls(email_text),
+        "total_features_active": int(len(active_indices)),
     }
 
-    return explanation
+
+def display_feature_importance(model_or_pipeline: Any, feature_names: list[str] | None = None, n: int = 20) -> None:
+    """Print top coefficient-based features."""
+    top_phishing, phishing_coefs, top_ham, ham_coefs = get_top_features(
+        model_or_pipeline,
+        feature_names=feature_names,
+        n=n,
+    )
+    print("Top phishing indicators:")
+    for feature, coefficient in zip(top_phishing, phishing_coefs):
+        print(f"  {feature}: {coefficient:+.4f}")
+
+    print("Top ham indicators:")
+    for feature, coefficient in zip(top_ham, ham_coefs):
+        print(f"  {feature}: {coefficient:+.4f}")
 
 
-def display_email_explanation(explanation: Dict[str, Any]) -> None:
-    """Display explanation for email in readable format.
-
-    Args:
-        explanation: Explanation dictionary from get_email_explanation()
-    """
-    logger.info("\n" + "=" * 70)
-    logger.info(f"PREDICTION: {explanation['prediction']}")
-    logger.info(f"Probability: {explanation['probability']:.4f}")
-    logger.info(f"Risk Score: {explanation['risk_score']}/100")
-    logger.info("=" * 70)
-
-    logger.info("\nTop Contributing Features (Text-based):")
-    for i, (feature, contribution, coef) in enumerate(
-        explanation["top_tfidf_features"][:5], 1
-    ):
-        direction = "Phishing" if coef > 0 else "Ham"
-        logger.info(
-            f"  {i}. {feature:<30} ({direction:>8}) - "
-            f"Contribution: {contribution:.4f}"
+def display_email_explanation(explanation: dict[str, Any]) -> None:
+    """Print a compact per-email explanation."""
+    print(f"Prediction: {explanation['prediction']}")
+    print(f"Risk score: {explanation['risk_score']}/100")
+    print("Top active features:")
+    for item in explanation["top_active_features"]:
+        print(
+            f"  {item['feature']}: {item['direction']} "
+            f"contribution={item['contribution']:+.4f}"
         )
-
-    logger.info("\nTop Contributing Features (Statistical):")
-    for i, (feature, contribution, coef) in enumerate(
-        explanation["top_stat_features"], 1
-    ):
-        direction = "Phishing" if coef > 0 else "Ham"
-        logger.info(
-            f"  {i}. {feature:<30} ({direction:>8}) - "
-            f"Contribution: {contribution:.4f}"
-        )
-
-    if explanation["suspicious_keywords"]:
-        logger.info(f"\nSuspicious Keywords Found: {', '.join(explanation['suspicious_keywords'])}")
-
-    if explanation["positive_evidence"]:
-        logger.info(
-            f"Phishing Indicators Present: {', '.join(explanation['positive_evidence'][:3])}"
-        )
-
-    if explanation["negative_evidence"]:
-        logger.info(
-            f"Legitimacy Indicators: {', '.join(explanation['negative_evidence'][:3])}"
-        )
-
-    logger.info(f"\nEmail Stats:")
-    logger.info(f"  Length: {explanation['email_length']} characters")
-    logger.info(f"  Words: {explanation['word_count']}")
-    logger.info(f"  URLs: {explanation['url_count']}")
-    logger.info(f"  Active Features: {explanation['total_features_active']}")
-    logger.info("=" * 70)

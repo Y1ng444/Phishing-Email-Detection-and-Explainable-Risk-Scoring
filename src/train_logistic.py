@@ -32,10 +32,13 @@ def train_logistic_model(X_train, y_train) -> LogisticRegression:
     logger.info("Training Logistic Regression model...")
 
     model = LogisticRegression(
-        class_weight="balanced",
-        max_iter=LOGISTIC_REGRESSION_MAX_ITER,
-        random_state=RANDOM_SEED,
-        solver="lbfgs",
+    solver="saga",
+    penalty="l2",
+    class_weight="balanced",
+    max_iter=5000,
+    tol=1e-3,
+    random_state=42,
+    n_jobs=-1
     )
     model.fit(X_train, y_train)
 

@@ -117,11 +117,11 @@ def main():
     logistic_model_final = train_logistic_model(X_train_smote, y_train_smote)
 
     # Save final models
-    baseline_path = MODELS_DIR / "naive_bayes_model_final.pkl"
+    baseline_path = MODELS_DIR / "naive_bayes_model.pkl"
     joblib.dump(baseline_model_final, baseline_path)
     logger.info(f"Final baseline model saved to {baseline_path}")
 
-    logistic_path = MODELS_DIR / "logistic_regression_model_final.pkl"
+    logistic_path = MODELS_DIR / "logistic_regression_model.pkl"
     joblib.dump(logistic_model_final, logistic_path)
     logger.info(f"Final logistic regression model saved to {logistic_path}")
 

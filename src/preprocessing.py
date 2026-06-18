@@ -2,224 +2,548 @@
 
 import re
 import logging
-from typing import Tuple, List, Dict, Any
 from pathlib import Path
+from typing import Tuple, List, Optional, Dict
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+
 from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
 from nltk.stem import WordNetLemmatizer
-import nltk
 
 from .utils import setup_logger, DATA_DIR, RESULTS_DIR, set_seed
 
 logger = setup_logger(__name__)
 
-# Download required NLTK data
-_NLTK_DOWNLOADS = ["stopwords", "punkt", "punkt_tab", "wordnet", "averaged_perceptron_tagger"]
-for resource in _NLTK_DOWNLOADS:
-    try:
-        nltk.download(resource, quiet=True)
-    except Exception:
-        pass
-
-# Initialize lemmatizer and stopwords
+# Initialize NLTK helpers without downloading resources at import time.
 LEMMATIZER = WordNetLemmatizer()
-STOP_WORDS = set(stopwords.words("english"))
+_TOKENIZER_AVAILABLE = True
+_LEMMATIZER_AVAILABLE = True
 
-# Required columns for dataset validation
-REQUIRED_COLUMNS = {"text_combined", "label"}
+FALLBACK_STOP_WORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "by",
+    "for",
+    "from",
+    "has",
+    "he",
+    "in",
+    "is",
+    "it",
+    "its",
+    "of",
+    "on",
+    "that",
+    "the",
+    "to",
+    "was",
+    "were",
+    "will",
+    "with",
+    "you",
+    "your",
+}
+
+try:
+    STOP_WORDS = set(stopwords.words("english"))
+except LookupError:
+    STOP_WORDS = FALLBACK_STOP_WORDS
+    logger.warning(
+        "NLTK stopwords data is not installed. Using a small built-in "
+        "fallback stopword list. For full preprocessing, run: "
+        "python -m nltk.downloader stopwords punkt wordnet"
+    )
 
 
-def _get_csv_files() -> List[Path]:
-    """Get all CSV files from data directory recursively.
+TEXT_COLUMN_CANDIDATES = [
+    "text_combined",
+    "text",
+    "email",
+    "email_text",
+    "email text",
+    "body",
+    "message",
+    "content",
+    "subject",
+    "mail",
+    "email_body",
+    "email body",
+    "Body",
+    "Subject",
+    "Message",
+    "Content",
+    "Text",
+    "Email Text",
+]
 
-    Returns:
-        List of Path objects for all CSV files found
+LABEL_COLUMN_CANDIDATES = [
+    "label",
+    "Label",
+    "class",
+    "Class",
+    "target",
+    "Target",
+    "phishing",
+    "Phishing",
+    "category",
+    "Category",
+    "type",
+    "Type",
+]
 
-    Raises:
-        FileNotFoundError: If data directory does not exist
-    """
-    if not DATA_DIR.exists():
-        logger.error(f"Data directory not found at {DATA_DIR}")
-        raise FileNotFoundError(f"Data directory not found at {DATA_DIR}")
+HAM_LABELS = {
+    "0",
+    "ham",
+    "benign",
+    "legitimate",
+    "legit",
+    "safe",
+    "normal",
+    "not phishing",
+    "non-phishing",
+    "non phishing",
+    "valid",
+    "clean",
+    "false",
+    "no",
+    "safe email",
+    "ham email",
+}
 
-    csv_files = sorted(DATA_DIR.rglob("*.csv"))
-    logger.info(f"Found {len(csv_files)} CSV file(s) in {DATA_DIR}")
+PHISHING_LABELS = {
+    "1",
+    "phishing",
+    "phish",
+    "spam",
+    "fraud",
+    "malicious",
+    "scam",
+    "nigerian fraud",
+    "nigerian_fraud",
+    "suspicious",
+    "attack",
+    "true",
+    "yes",
+    "phishing email",
+    "spam email",
+    "fraud email",
+}
 
-    return csv_files
+
+def _normalize_column_name(name: str) -> str:
+    """Normalize column name for robust matching."""
+    return str(name).strip().lower().replace("_", " ")
 
 
-def _validate_csv(csv_path: Path) -> bool:
-    """Validate CSV file has required columns.
+def _find_column(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
+    """Find the first matching column from candidate names."""
+    normalized_map = {
+        _normalize_column_name(col): col
+        for col in df.columns
+    }
 
-    Args:
-        csv_path: Path to CSV file
+    for candidate in candidates:
+        normalized_candidate = _normalize_column_name(candidate)
+        if normalized_candidate in normalized_map:
+            return normalized_map[normalized_candidate]
 
-    Returns:
-        True if valid, False otherwise
-    """
+    return None
+
+
+def _read_csv_safely(csv_file: Path) -> pd.DataFrame:
+    """Read CSV file with fallback encodings."""
     try:
-        df = pd.read_csv(csv_path, nrows=1)
-        columns = set(df.columns)
+        return pd.read_csv(csv_file, low_memory=False)
+    except UnicodeDecodeError:
+        return pd.read_csv(csv_file, encoding="latin1", low_memory=False)
+    except Exception as exc:
+        raise RuntimeError(f"Failed to read {csv_file.name}: {exc}") from exc
 
-        if not REQUIRED_COLUMNS.issubset(columns):
+
+def _build_text_combined(df: pd.DataFrame) -> Optional[pd.Series]:
+    """
+    Build text_combined column from available text-like columns.
+
+    Priority:
+    1. Use existing text_combined if available.
+    2. Combine known text-like columns.
+    3. Fallback to object columns that are likely text.
+    """
+
+    existing_text_col = _find_column(df, ["text_combined"])
+    if existing_text_col:
+        return df[existing_text_col].astype(str)
+
+    matched_text_columns = []
+
+    normalized_label_candidates = {
+        _normalize_column_name(col)
+        for col in LABEL_COLUMN_CANDIDATES
+    }
+
+    for col in df.columns:
+        normalized_col = _normalize_column_name(col)
+
+        if normalized_col in normalized_label_candidates:
+            continue
+
+        for candidate in TEXT_COLUMN_CANDIDATES:
+            if normalized_col == _normalize_column_name(candidate):
+                matched_text_columns.append(col)
+                break
+
+    matched_text_columns = list(dict.fromkeys(matched_text_columns))
+
+    if matched_text_columns:
+        return (
+            df[matched_text_columns]
+            .fillna("")
+            .astype(str)
+            .agg(" ".join, axis=1)
+            .str.strip()
+        )
+
+    # Fallback: use object/string columns that are likely email text
+    object_columns = [
+        col
+        for col in df.columns
+        if df[col].dtype == "object"
+    ]
+
+    possible_text_columns = []
+
+    for col in object_columns:
+        normalized_col = _normalize_column_name(col)
+
+        if normalized_col in normalized_label_candidates:
+            continue
+
+        avg_length = (
+            df[col]
+            .dropna()
+            .astype(str)
+            .str.len()
+            .mean()
+        )
+
+        if pd.notna(avg_length) and avg_length >= 10:
+            possible_text_columns.append(col)
+
+    if possible_text_columns:
+        return (
+            df[possible_text_columns]
+            .fillna("")
+            .astype(str)
+            .agg(" ".join, axis=1)
+            .str.strip()
+        )
+
+    return None
+
+
+def _normalize_label_value(value) -> Optional[int]:
+    """Normalize one label value into binary format."""
+    if pd.isna(value):
+        return None
+
+    if isinstance(value, (int, np.integer)):
+        if value == 0:
+            return 0
+        if value == 1:
+            return 1
+
+    if isinstance(value, (float, np.floating)):
+        if value == 0.0:
+            return 0
+        if value == 1.0:
+            return 1
+
+    value_str = str(value).strip().lower()
+    value_str = value_str.replace("-", " ")
+    value_str = value_str.replace("_", " ")
+    value_str = re.sub(r"\s+", " ", value_str)
+
+    if value_str in HAM_LABELS:
+        return 0
+
+    if value_str in PHISHING_LABELS:
+        return 1
+
+    if "phish" in value_str:
+        return 1
+
+    if "fraud" in value_str:
+        return 1
+
+    if "spam" in value_str:
+        return 1
+
+    if "scam" in value_str:
+        return 1
+
+    if "malicious" in value_str:
+        return 1
+
+    if "safe" in value_str:
+        return 0
+
+    if "ham" in value_str:
+        return 0
+
+    if "benign" in value_str:
+        return 0
+
+    if "legitimate" in value_str:
+        return 0
+
+    return None
+
+
+def _normalize_label_column(df: pd.DataFrame) -> Optional[pd.Series]:
+    """Find and normalize label column."""
+    label_col = _find_column(df, LABEL_COLUMN_CANDIDATES)
+
+    if not label_col:
+        return None
+
+    normalized = df[label_col].apply(_normalize_label_value)
+
+    return normalized
+
+
+def _load_single_dataset(csv_file: Path) -> Optional[pd.DataFrame]:
+    """
+    Load one CSV file and normalize it into:
+
+    - text_combined
+    - label
+    """
+
+    try:
+        raw_df = _read_csv_safely(csv_file)
+
+        if raw_df.empty:
+            logger.warning(f"Skipping {csv_file.name}: empty CSV file")
+            return None
+
+        text_combined = _build_text_combined(raw_df)
+
+        if text_combined is None:
             logger.warning(
-                f"Skipping {csv_path.name}: Missing columns. "
-                f"Expected {REQUIRED_COLUMNS}, Found {columns}"
+                f"Skipping {csv_file.name}: no valid text column found"
             )
-            return False
+            return None
 
-        return True
+        labels = _normalize_label_column(raw_df)
 
-    except Exception as e:
-        logger.warning(f"Skipping {csv_path.name}: Error reading file - {str(e)}")
-        return False
+        if labels is None:
+            logger.warning(
+                f"Skipping {csv_file.name}: no valid label column found"
+            )
+            return None
+
+        normalized_df = pd.DataFrame(
+            {
+                "text_combined": text_combined,
+                "label": labels,
+            }
+        )
+
+        before_drop = len(normalized_df)
+
+        normalized_df = normalized_df.dropna(
+            subset=["text_combined", "label"]
+        )
+
+        normalized_df["text_combined"] = (
+            normalized_df["text_combined"]
+            .astype(str)
+            .str.strip()
+        )
+
+        normalized_df = normalized_df[
+            normalized_df["text_combined"] != ""
+        ]
+
+        normalized_df["label"] = normalized_df["label"].astype(int)
+
+        normalized_df = normalized_df[
+            normalized_df["label"].isin([0, 1])
+        ]
+
+        if normalized_df.empty:
+            logger.warning(
+                f"Skipping {csv_file.name}: no usable rows after normalization"
+            )
+            return None
+
+        logger.info(
+            f"Loaded {csv_file.name}: "
+            f"{len(normalized_df):,}/{before_drop:,} usable rows"
+        )
+
+        return normalized_df
+
+    except Exception as exc:
+        logger.error(f"Error loading {csv_file.name}: {exc}")
+        return None
 
 
-def _load_single_csv(csv_path: Path) -> Tuple[pd.DataFrame, bool]:
-    """Load single CSV file with error handling.
+def load_dataset(data_dir: Optional[Path] = None) -> Tuple[pd.DataFrame, int]:
+    """
+    Load and merge all labeled CSV files from the data directory.
+
+    The function recursively scans the data directory and loads every CSV file
+    that can be normalized into two columns:
+
+    - text_combined
+    - label
+
+    Label format:
+
+    - 0 = Ham / Benign
+    - 1 = Phishing / Spam / Fraud / Malicious
 
     Args:
-        csv_path: Path to CSV file
+        data_dir: Optional custom data directory. If None, DATA_DIR is used.
 
     Returns:
-        Tuple of (dataframe or None, success_bool)
-    """
-    try:
-        df = pd.read_csv(csv_path)
-
-        # Select only required columns
-        df = df[["text_combined", "label"]].copy()
-
-        logger.info(f"Loaded {csv_path.name}: {df.shape[0]} rows")
-
-        return df, True
-
-    except Exception as e:
-        logger.warning(f"Error loading {csv_path.name}: {str(e)}")
-        return None, False
-
-
-def load_dataset() -> Tuple[pd.DataFrame, int]:
-    """Load and merge all labeled CSV files from data directory.
-
-    Automatically scans data/ folder recursively for all CSV files,
-    validates they contain required columns (text_combined, label),
-    merges them, removes duplicates, and handles missing values.
-
-    Returns:
-        Tuple of (merged_dataframe, total_rows_before_cleaning)
+        Tuple[pd.DataFrame, int]: merged dataframe and total number of rows.
 
     Raises:
-        FileNotFoundError: If data directory not found
-        ValueError: If no valid CSV files found
+        FileNotFoundError: If no CSV files are found.
+        ValueError: If no valid dataset can be loaded.
     """
-    logger.info("=" * 70)
-    logger.info("LOADING DATASET: Multi-CSV Auto-Discovery")
-    logger.info("=" * 70)
 
-    # Get all CSV files
-    csv_files = _get_csv_files()
+    dataset_dir = Path(data_dir) if data_dir else DATA_DIR
+
+    csv_files = sorted(dataset_dir.rglob("*.csv"))
 
     if not csv_files:
-        logger.error("No CSV files found in data directory")
-        raise FileNotFoundError(f"No CSV files found in {DATA_DIR}")
+        logger.error(f"No CSV files found in {dataset_dir}")
+        raise FileNotFoundError(
+            f"No CSV files found in {dataset_dir}"
+        )
 
-    logger.info(f"\nFound {len(csv_files)} CSV file(s) to process:")
-    for csv_file in csv_files:
-        logger.info(f"  - {csv_file.name}")
+    logger.info("=" * 70)
+    logger.info("LOADING ALL LABELED CSV DATASETS")
+    logger.info("=" * 70)
+    logger.info(f"Data directory: {dataset_dir}")
+    logger.info(f"CSV files found: {len(csv_files)}")
 
-    # Validate CSV files
-    logger.info("\nValidating CSV files...")
-    valid_files = []
+    dataframes = []
     skipped_files = []
 
-    for csv_path in csv_files:
-        if _validate_csv(csv_path):
-            valid_files.append(csv_path)
-        else:
-            skipped_files.append(csv_path.name)
-
-    logger.info(f"Valid files: {len(valid_files)}, Skipped files: {len(skipped_files)}")
-
-    if not valid_files:
-        logger.error("No valid CSV files found with required columns")
-        raise ValueError(
-            f"No valid CSV files found. Required columns: {REQUIRED_COLUMNS}"
-        )
-
-    # Load valid CSV files
-    logger.info("\nLoading valid CSV files...")
-    dataframes = []
     total_rows_before_cleaning = 0
 
-    for csv_path in valid_files:
-        df, success = _load_single_csv(csv_path)
-        if success:
-            dataframes.append(df)
-            total_rows_before_cleaning += df.shape[0]
+    for csv_file in csv_files:
+        logger.info(f"Processing file: {csv_file.name}")
+
+        loaded_df = _load_single_dataset(csv_file)
+
+        if loaded_df is None:
+            skipped_files.append(csv_file.name)
+            continue
+
+        total_rows_before_cleaning += len(loaded_df)
+        dataframes.append(loaded_df)
 
     if not dataframes:
-        logger.error("Failed to load any CSV files")
-        raise ValueError("Failed to load any CSV files")
-
-    # Merge all dataframes
-    logger.info(f"\nMerging {len(dataframes)} dataframe(s)...")
-    df = pd.concat(dataframes, ignore_index=True)
-    logger.info(f"After merge: {df.shape[0]} rows, {df.shape[1]} columns")
-
-    # Data cleaning and validation
-    logger.info("\nPerforming data cleaning and validation...")
-
-    # Count duplicates before removal
-    duplicate_count = df.duplicated(subset=["text_combined"]).sum()
-
-    # Remove duplicates
-    if duplicate_count > 0:
-        logger.info(f"Removing {duplicate_count} duplicate email(s)...")
-        df = df.drop_duplicates(subset=["text_combined"], keep="first")
-
-    # Count missing values before removal
-    missing_text = df["text_combined"].isnull().sum()
-    missing_label = df["label"].isnull().sum()
-
-    if missing_text > 0 or missing_label > 0:
-        logger.warning(
-            f"Found missing values: text_combined={missing_text}, label={missing_label}"
+        raise ValueError(
+            "No valid CSV datasets could be loaded. "
+            "Please make sure your CSV files contain email text and labels."
         )
-        df = df.dropna(subset=["text_combined", "label"])
-        logger.info(f"After removing missing values: {df.shape[0]} rows")
 
-    # Convert text_combined to string
-    df["text_combined"] = df["text_combined"].astype(str)
-    df["label"] = df["label"].astype(int)
+    combined_df = pd.concat(
+        dataframes,
+        ignore_index=True
+    )
 
-    # Dataset statistics
-    logger.info("\n" + "=" * 70)
-    logger.info("DATASET STATISTICS")
     logger.info("=" * 70)
-    logger.info(f"CSV files loaded:        {len(valid_files)}")
-    logger.info(f"CSV files skipped:       {len(skipped_files)}")
-    logger.info(f"Total rows (raw):        {total_rows_before_cleaning:,}")
-    logger.info(f"Total rows (cleaned):    {df.shape[0]:,}")
-    logger.info(f"Duplicates removed:      {duplicate_count:,}")
-    logger.info(f"Missing values removed:  {missing_text + missing_label:,}")
-    logger.info(f"Final dataset shape:     {df.shape}")
+    logger.info("MERGING AND CLEANING DATASETS")
+    logger.info("=" * 70)
 
-    # Class distribution
-    logger.info(f"\nClass distribution:")
-    class_dist = df["label"].value_counts().sort_index()
-    for label, count in class_dist.items():
-        pct = (count / len(df)) * 100
-        label_name = "Ham" if label == 0 else "Phishing"
-        logger.info(f"  {label_name:10s} ({label}): {count:6,} ({pct:5.2f}%)")
+    before_final_cleaning = len(combined_df)
 
-    logger.info("=" * 70 + "\n")
+    combined_df = combined_df.dropna(
+        subset=["text_combined", "label"]
+    )
 
-    return df, total_rows_before_cleaning
+    combined_df["text_combined"] = (
+        combined_df["text_combined"]
+        .astype(str)
+        .str.strip()
+    )
+
+    combined_df = combined_df[
+        combined_df["text_combined"] != ""
+    ]
+
+    after_missing_removal = len(combined_df)
+
+    combined_df = combined_df.drop_duplicates(
+        subset=["text_combined"]
+    )
+
+    after_duplicate_removal = len(combined_df)
+
+    combined_df["label"] = combined_df["label"].astype(int)
+
+    combined_df = combined_df[["text_combined", "label"]]
+
+    logger.info(f"CSV files found: {len(csv_files)}")
+    logger.info(f"CSV files loaded: {len(dataframes)}")
+    logger.info(f"CSV files skipped: {len(skipped_files)}")
+
+    if skipped_files:
+        logger.warning(f"Skipped files: {skipped_files}")
+
+    logger.info(
+        f"Rows before final cleaning: {before_final_cleaning:,}"
+    )
+
+    logger.info(
+        f"Rows removed due to missing or empty values: "
+        f"{before_final_cleaning - after_missing_removal:,}"
+    )
+
+    logger.info(
+        f"Duplicate rows removed: "
+        f"{after_missing_removal - after_duplicate_removal:,}"
+    )
+
+    logger.info(
+        f"Final dataset rows: {after_duplicate_removal:,}"
+    )
+
+    logger.info("=" * 70)
+    logger.info("FINAL CLASS DISTRIBUTION")
+    logger.info("=" * 70)
+
+    class_distribution = (
+        combined_df["label"]
+        .value_counts()
+        .sort_index()
+    )
+
+    logger.info(f"\n{class_distribution.to_string()}")
+
+    if 0 not in class_distribution.index:
+        logger.warning("Warning: no Ham class found in final dataset")
+
+    if 1 not in class_distribution.index:
+        logger.warning("Warning: no Phishing class found in final dataset")
+
+    return combined_df, len(combined_df)
 
 
 def explore_dataset(df: pd.DataFrame) -> None:
@@ -230,35 +554,31 @@ def explore_dataset(df: pd.DataFrame) -> None:
     """
     logger.info("=== EXPLORATORY DATA ANALYSIS ===")
 
-    # Basic statistics
     logger.info(f"Dataset shape: {df.shape}")
     logger.info(f"Columns: {list(df.columns)}")
     logger.info(f"Data types:\n{df.dtypes}")
 
-    # Missing values
     missing = df.isnull().sum()
     if missing.any():
         logger.warning(f"Missing values:\n{missing[missing > 0]}")
     else:
         logger.info("No missing values found")
 
-    # Class distribution
     logger.info(f"\nClass distribution:\n{df['label'].value_counts().to_string()}")
     logger.info(
         f"Class proportions:\n{df['label'].value_counts(normalize=True).to_string()}"
     )
 
-    # Text statistics
     df["text_length"] = df["text_combined"].apply(len)
     df["word_count"] = df["text_combined"].apply(lambda x: len(x.split()))
 
-    logger.info(f"\nText length statistics:")
+    logger.info("\nText length statistics:")
     logger.info(f"  Mean: {df['text_length'].mean():.2f} characters")
     logger.info(f"  Median: {df['text_length'].median():.2f} characters")
     logger.info(f"  Max: {df['text_length'].max():.2f} characters")
     logger.info(f"  Min: {df['text_length'].min():.2f} characters")
 
-    logger.info(f"\nWord count statistics:")
+    logger.info("\nWord count statistics:")
     logger.info(f"  Mean: {df['word_count'].mean():.2f} words")
     logger.info(f"  Median: {df['word_count'].median():.2f} words")
     logger.info(f"  Max: {df['word_count'].max():.2f} words")
@@ -275,45 +595,86 @@ def visualize_eda(df: pd.DataFrame) -> None:
 
     logger.info("Generating EDA visualizations...")
 
-    # Prepare data
     df["text_length"] = df["text_combined"].apply(len)
 
-    # Figure 1: Label distribution
     fig, ax = plt.subplots(figsize=(10, 6))
-    label_counts = df["label"].value_counts()
-    label_names = ["Ham", "Phishing"]
+    label_counts = df["label"].value_counts().sort_index()
+
+    label_names = []
+    values = []
+
+    for label in label_counts.index:
+        if label == 0:
+            label_names.append("Ham")
+        elif label == 1:
+            label_names.append("Phishing")
+        else:
+            label_names.append(str(label))
+
+        values.append(label_counts[label])
+
     colors = ["#2ecc71", "#e74c3c"]
 
-    ax.bar(label_names, label_counts.values, color=colors, alpha=0.7, edgecolor="black")
+    ax.bar(
+        label_names,
+        values,
+        color=colors[:len(values)],
+        alpha=0.7,
+        edgecolor="black",
+    )
+
     ax.set_ylabel("Count", fontsize=12)
     ax.set_title("Email Class Distribution", fontsize=14, fontweight="bold")
     ax.grid(axis="y", alpha=0.3)
 
-    for i, v in enumerate(label_counts.values):
-        ax.text(i, v + 1000, str(v), ha="center", fontweight="bold")
+    for i, v in enumerate(values):
+        ax.text(i, v + max(values) * 0.01, str(v), ha="center", fontweight="bold")
 
     plt.tight_layout()
-    plt.savefig(RESULTS_DIR / "01_label_distribution.png", dpi=300, bbox_inches="tight")
+    plt.savefig(
+        RESULTS_DIR / "01_label_distribution.png",
+        dpi=300,
+        bbox_inches="tight",
+    )
     logger.info("Saved: 01_label_distribution.png")
     plt.close()
 
-    # Figure 2: Text length histogram by class
     fig, ax = plt.subplots(figsize=(12, 6))
 
-    for label, name, color in [(0, "Ham", "#2ecc71"), (1, "Phishing", "#e74c3c")]:
+    for label, name, color in [
+        (0, "Ham", "#2ecc71"),
+        (1, "Phishing", "#e74c3c"),
+    ]:
         data = df[df["label"] == label]["text_length"]
+
+        if len(data) == 0:
+            continue
+
         ax.hist(
-            data, bins=50, label=name, alpha=0.6, color=color, edgecolor="black"
+            data,
+            bins=50,
+            label=name,
+            alpha=0.6,
+            color=color,
+            edgecolor="black",
         )
 
     ax.set_xlabel("Text Length (characters)", fontsize=12)
     ax.set_ylabel("Frequency", fontsize=12)
-    ax.set_title("Email Text Length Distribution by Class", fontsize=14, fontweight="bold")
+    ax.set_title(
+        "Email Text Length Distribution by Class",
+        fontsize=14,
+        fontweight="bold",
+    )
     ax.legend(fontsize=11)
     ax.grid(axis="y", alpha=0.3)
 
     plt.tight_layout()
-    plt.savefig(RESULTS_DIR / "02_text_length_histogram.png", dpi=300, bbox_inches="tight")
+    plt.savefig(
+        RESULTS_DIR / "02_text_length_histogram.png",
+        dpi=300,
+        bbox_inches="tight",
+    )
     logger.info("Saved: 02_text_length_histogram.png")
     plt.close()
 
@@ -348,6 +709,42 @@ def _count_urls(text: str) -> int:
     return len(re.findall(url_pattern, text)) + len(re.findall(www_pattern, text))
 
 
+def _tokenize_clean_text(text: str) -> List[str]:
+    """Tokenize text with a regex fallback when NLTK punkt is unavailable."""
+    global _TOKENIZER_AVAILABLE
+
+    if _TOKENIZER_AVAILABLE:
+        try:
+            return word_tokenize(text)
+        except LookupError:
+            _TOKENIZER_AVAILABLE = False
+            logger.warning(
+                "NLTK punkt tokenizer data is not installed. Falling back to "
+                "regex tokenization. For full preprocessing, run: "
+                "python -m nltk.downloader punkt"
+            )
+
+    return re.findall(r"\b\w+\b", text)
+
+
+def _lemmatize_tokens(tokens: List[str]) -> List[str]:
+    """Lemmatize tokens when WordNet is available, otherwise return tokens."""
+    global _LEMMATIZER_AVAILABLE
+
+    if not _LEMMATIZER_AVAILABLE:
+        return tokens
+
+    try:
+        return [LEMMATIZER.lemmatize(token) for token in tokens]
+    except LookupError:
+        _LEMMATIZER_AVAILABLE = False
+        logger.warning(
+            "NLTK WordNet data is not installed. Skipping lemmatization. "
+            "For full preprocessing, run: python -m nltk.downloader wordnet"
+        )
+        return tokens
+
+
 def clean_email(text: str) -> str:
     """Clean and preprocess email text.
 
@@ -360,31 +757,21 @@ def clean_email(text: str) -> str:
     if not isinstance(text, str):
         return ""
 
-    # Lowercase
     text = text.lower()
 
-    # Remove HTML tags
     text = _remove_html_tags(text)
 
-    # Remove URLs
     text = _remove_urls(text)
     text = _remove_special_urls(text)
 
-    # Remove punctuation
     text = re.sub(r"[^\w\s]", "", text)
 
-    # Remove digits
     text = re.sub(r"\d+", "", text)
 
-    # Tokenize
-    tokens = word_tokenize(text)
+    tokens = _tokenize_clean_text(text)
 
-    # Remove stopwords and lemmatize
-    tokens = [
-        LEMMATIZER.lemmatize(token)
-        for token in tokens
-        if token not in STOP_WORDS and len(token) > 1
-    ]
+    tokens = [token for token in tokens if token not in STOP_WORDS and len(token) > 1]
+    tokens = _lemmatize_tokens(tokens)
 
     return " ".join(tokens)
 
@@ -403,7 +790,6 @@ def preprocess_dataset(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df["text_cleaned"] = df["text_combined"].apply(clean_email)
 
-    # Remove empty rows
     df = df[df["text_cleaned"].str.len() > 0]
 
     logger.info(f"After preprocessing: {df.shape[0]} rows remaining")
@@ -426,9 +812,7 @@ def get_statistics(text: str) -> dict:
     digit_count = sum(1 for c in text if c.isdigit())
     url_count = _count_urls(text)
 
-    uppercase_ratio = (
-        uppercase_count / text_length if text_length > 0 else 0
-    )
+    uppercase_ratio = uppercase_count / text_length if text_length > 0 else 0
     digit_ratio = digit_count / text_length if text_length > 0 else 0
 
     return {
