@@ -40,7 +40,7 @@ Run the Streamlit app:
 streamlit run app.py
 ```
 
-## Optional NLTK Data
+## Optional NLTK Data 
 
 The optimized workflow does not require NLTK. The legacy preprocessing module
 does not download NLTK resources during import; if you use the legacy scripts and
