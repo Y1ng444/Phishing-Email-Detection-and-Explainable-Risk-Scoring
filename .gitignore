@@ -1,19 +1,19 @@
-# Dataset
-data/
-
-# Models
-models/
-
-# Python cache
 __pycache__/
+**/__pycache__/
 *.pyc
 
-# Virtual environment
-venv/
+models/*
+results/*
+data/raw/*
+data/processed/*
+
+!models/.gitkeep
+!results/.gitkeep
+!data/README.md
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
 .venv/
-
-# Jupyter
-.ipynb_checkpoints/
-
-# Environment variables
+venv/
 .env
+.ipynb_checkpoints/

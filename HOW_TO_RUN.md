@@ -1,79 +1,83 @@
 # How To Run
 
-## 1. Install dependencies
+## 1. Create a virtual environment
+
+```bash
+python -m venv .venv
+```
+
+Windows PowerShell:
+
+```bash
+.venv\Scripts\Activate.ps1
+```
+
+macOS/Linux:
+
+```bash
+source .venv/bin/activate
+```
+
+## 2. Install requirements
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## 2. Add raw CSV files
-
-Put raw CSV files into:
-
-```text
-data/raw/
-```
+## 3. Place raw CSV files in `data/raw/`
 
 Supported schemas:
 
-```text
-sender,receiver,date,subject,body,label,urls
-sender,receiver,date,subject,body,urls,label
-subject,body,label
-text_combined,label
-```
+- `subject, body, label`
+- `subject, body, label, urls`
+- `sender, receiver, date, subject, body, label, urls`
+- `sender, receiver, date, subject, body, urls, label`
+- `text_combined, label`
 
-## 3. Standardize datasets
+## 4. Run standardization
 
 ```bash
-python standardize_datasets.py --input-dir data/raw --output data/processed/phishing_email_standardized.csv
+python standardize_datasets.py
 ```
 
-Outputs:
+Output:
 
 ```text
 data/processed/phishing_email_standardized.csv
-data/processed/standardization_report.csv
 ```
 
-## 4. Run EDA
+## 5. Run EDA
 
 ```bash
-python eda_standardized.py --input data/processed/phishing_email_standardized.csv
+python eda_standardized.py
 ```
 
 Outputs:
 
 ```text
-results/eda_summary.csv
 results/class_distribution.png
 results/text_length_distribution.png
 ```
 
-## 5. Train models
+## 6. Train models
 
 ```bash
-python train_optimized.py --input data/processed/phishing_email_standardized.csv
+python train_optimized.py
 ```
 
-Outputs:
+Outputs include:
 
 ```text
+models/phishing_logreg_tfidf.pkl
 results/metrics_optimized.csv
-results/logistic_regression_error_analysis.csv
-models/naive_bayes_pipeline.pkl
-models/logistic_regression_pipeline.pkl
-models/linear_svm_pipeline.pkl
+results/error_samples.csv
+results/sample_predictions.csv
+results/top_phishing_indicators.csv
+results/top_legitimate_indicators.csv
 ```
 
-## 6. Run Streamlit app
+## 7. Launch Streamlit app
 
 ```bash
 streamlit run app.py
 ```
-
-## Data leakage note
-
-`train_optimized.py` performs the stratified train/test split before fitting
-TF-IDF. Because TF-IDF is inside each sklearn `Pipeline`, it is fit on training
-text only and then reused to transform the test set.
