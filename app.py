@@ -13,12 +13,26 @@ from src.risk_scoring import load_model, model_exists, score_email
 
 MODEL_PATH = Path("models/phishing_logreg_tfidf.pkl")
 
+EXAMPLE_EMAIL = """Subject: Urgent account verification required
+
+We noticed unusual activity on your account. Please verify your login details
+within 24 hours at http://account-verify.example/login to avoid suspension.
+"""
+
+
+def load_example_email() -> None:
+    """Load the example email into the text area."""
+    st.session_state.email_text = EXAMPLE_EMAIL
+
 
 st.set_page_config(page_title="Phishing Email Detector", page_icon="!", layout="centered")
 st.title("Phishing Email Detection")
 
 if not model_exists(MODEL_PATH):
-    st.error("The trained model was not found.")
+    st.error(
+        "Model file not found. Please run python train_optimized.py first to train "
+        "and save the model."
+    )
     st.code(
         "\n".join(
             [
@@ -39,31 +53,24 @@ def get_model():
     return load_model(MODEL_PATH)
 
 
-model = get_model()
-
-example_email = """Subject: Urgent account verification required
-
-We noticed unusual activity on your account. Please verify your login details
-within 24 hours at http://account-verify.example/login to avoid suspension.
-"""
-
 if "email_text" not in st.session_state:
     st.session_state.email_text = ""
 
-email_text = st.text_area(
-    "Email text",
-    key="email_text",
-    height=240,
-    placeholder="Paste an email subject, body, and URLs here.",
+model = get_model()
+
+st.button(
+    "Load Example",
+    width="stretch",
+    on_click=load_example_email,
 )
 
-col_a, col_b = st.columns(2)
-with col_a:
-    analyze = st.button("Analyze Email", type="primary", width="stretch")
-with col_b:
-    if st.button("Load Example", width="stretch"):
-        st.session_state.email_text = example_email
-        st.rerun()
+email_text = st.text_area(
+    "Paste email content here:",
+    key="email_text",
+    height=250,
+)
+
+analyze = st.button("Analyze Email", type="primary", width="stretch")
 
 if analyze:
     if not email_text.strip():

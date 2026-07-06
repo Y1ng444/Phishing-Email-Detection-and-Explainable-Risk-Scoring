@@ -1,6 +1,9 @@
 __pycache__/
 **/__pycache__/
+**pycache**/
 *.pyc
+*.pkl
+*.joblib
 
 models/*
 results/*
@@ -8,7 +11,9 @@ data/raw/*
 data/processed/*
 
 !models/.gitkeep
+!models/README.md
 !results/.gitkeep
+!results/README.md
 !data/README.md
 !data/raw/.gitkeep
 !data/processed/.gitkeep

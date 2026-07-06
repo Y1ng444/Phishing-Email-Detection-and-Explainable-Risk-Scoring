@@ -13,6 +13,7 @@ DEFAULT_INPUT_DIR = Path("data/raw")
 DEFAULT_OUTPUT_PATH = Path("data/processed/phishing_email_standardized.csv")
 
 OUTPUT_COLUMNS = [
+    "source_file",
     "sender",
     "receiver",
     "date",
@@ -158,9 +159,10 @@ def get_text_column(df: pd.DataFrame, canonical_name: str) -> pd.Series:
     return df[column].map(clean_value)
 
 
-def build_standardized_frame(df: pd.DataFrame) -> pd.DataFrame:
+def build_standardized_frame(df: pd.DataFrame, source_file: str) -> pd.DataFrame:
     """Build the standardized columns from one normalized raw dataframe."""
     output = pd.DataFrame(index=df.index)
+    output["source_file"] = source_file
     for column in ["sender", "receiver", "date", "subject", "body", "urls"]:
         output[column] = get_text_column(df, column)
 
@@ -201,7 +203,7 @@ def standardize_datasets(input_dir: Path, output_path: Path) -> pd.DataFrame:
         print(f"Processing {csv_path.name}...")
         raw_df = normalize_columns(read_csv_with_fallbacks(csv_path))
         total_rows_before += len(raw_df)
-        standardized = build_standardized_frame(raw_df)
+        standardized = build_standardized_frame(raw_df, csv_path.name)
         frames.append(standardized)
         print(f"  rows loaded: {len(raw_df):,}")
 
