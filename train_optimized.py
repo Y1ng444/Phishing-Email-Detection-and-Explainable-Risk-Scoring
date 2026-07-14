@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from typing import Any
 
 import joblib
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from sklearn.compose import ColumnTransformer
+from sklearn.decomposition import TruncatedSVD
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
@@ -26,9 +30,11 @@ from sklearn.metrics import (
 from sklearn.model_selection import train_test_split
 from sklearn.naive_bayes import MultinomialNB
 from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 from sklearn.svm import LinearSVC
 
-from src.explainability import save_global_indicators
+from src.explainability import save_global_indicators, save_text_metadata_explanations
+from src.feature_engineering import METADATA_FEATURES, build_model_input
 from src.risk_scoring import risk_level_from_score
 from src.text_cleaning import clean_text
 
@@ -36,9 +42,12 @@ from src.text_cleaning import clean_text
 DEFAULT_INPUT = Path("data/processed/phishing_email_standardized.csv")
 DEFAULT_RESULTS_DIR = Path("results")
 DEFAULT_MODELS_DIR = Path("models")
-FINAL_MODEL_NAME = "phishing_logreg_tfidf.pkl"
+LEGACY_TEXT_MODEL_NAME = "phishing_logreg_tfidf.pkl"
+FINAL_MODEL_NAME = "phishing_logreg_text_metadata.pkl"
+RANDOM_FOREST_MODEL_NAME = "phishing_random_forest_text_metadata.pkl"
 RANDOM_STATE = 42
 TEST_SIZE = 0.2
+SVD_COMPONENTS = 100
 
 
 def load_training_data(input_path: Path) -> pd.DataFrame:
@@ -130,7 +139,74 @@ def build_models() -> dict[str, Pipeline]:
     }
 
 
-def get_scores(model: Pipeline, texts: pd.Series) -> np.ndarray | None:
+def build_text_metadata_models() -> dict[str, Pipeline]:
+    """Create pipelines that combine TF-IDF text features with metadata.
+
+    The ColumnTransformer is inside each pipeline, so TF-IDF, SVD, and scaling
+    are all fit only on the training split. Metadata is row-wise deterministic
+    feature extraction and is not learned from the full dataset.
+    """
+    text_metadata_transformer = ColumnTransformer(
+        transformers=[
+            ("text", make_vectorizer(), "text_combined"),
+            ("metadata", StandardScaler(), METADATA_FEATURES),
+        ],
+        remainder="drop",
+        verbose_feature_names_out=False,
+    )
+
+    rf_transformer = ColumnTransformer(
+        transformers=[
+            (
+                "text",
+                Pipeline(
+                    [
+                        ("tfidf", make_vectorizer()),
+                        ("svd", TruncatedSVD(n_components=SVD_COMPONENTS, random_state=RANDOM_STATE)),
+                    ]
+                ),
+                "text_combined",
+            ),
+            ("metadata", StandardScaler(), METADATA_FEATURES),
+        ],
+        remainder="drop",
+        verbose_feature_names_out=False,
+    )
+
+    return {
+        "logistic_regression_text_metadata": Pipeline(
+            [
+                ("features", text_metadata_transformer),
+                (
+                    "clf",
+                    LogisticRegression(
+                        max_iter=2000,
+                        class_weight="balanced",
+                        random_state=RANDOM_STATE,
+                    ),
+                ),
+            ]
+        ),
+        "random_forest_text_metadata": Pipeline(
+            [
+                ("features", rf_transformer),
+                (
+                    "clf",
+                    RandomForestClassifier(
+                        n_estimators=100,
+                        max_depth=30,
+                        min_samples_leaf=2,
+                        class_weight="balanced_subsample",
+                        n_jobs=-1,
+                        random_state=RANDOM_STATE,
+                    ),
+                ),
+            ]
+        ),
+    }
+
+
+def get_scores(model: Pipeline, texts: Any) -> np.ndarray | None:
     """Return positive-class probabilities or decision scores."""
     if hasattr(model, "predict_proba"):
         return model.predict_proba(texts)[:, 1]
@@ -142,7 +218,7 @@ def get_scores(model: Pipeline, texts: pd.Series) -> np.ndarray | None:
 def evaluate_model(
     model_name: str,
     model: Pipeline,
-    x_test: pd.Series,
+    x_test: Any,
     y_test: pd.Series,
 ) -> dict[str, float | int | str]:
     """Calculate requested metrics for one fitted model."""
@@ -183,7 +259,7 @@ def evaluate_model(
 def save_confusion_matrix(
     model_name: str,
     model: Pipeline,
-    x_test: pd.Series,
+    x_test: Any,
     y_test: pd.Series,
     output_path: Path,
 ) -> None:
@@ -205,15 +281,14 @@ def save_confusion_matrix(
 
 
 def save_roc_curve(
-    models: dict[str, Pipeline],
-    x_test: pd.Series,
+    model_entries: list[tuple[str, Pipeline, Any]],
     y_test: pd.Series,
     output_path: Path,
 ) -> None:
     """Save a ROC curve comparison image."""
     fig, ax = plt.subplots(figsize=(7, 5))
 
-    for model_name, model in models.items():
+    for model_name, model, x_test in model_entries:
         scores = get_scores(model, x_test)
         if scores is None:
             continue
@@ -234,8 +309,7 @@ def save_roc_curve(
 
 
 def save_pr_curve(
-    models: dict[str, Pipeline],
-    x_test: pd.Series,
+    model_entries: list[tuple[str, Pipeline, Any]],
     y_test: pd.Series,
     output_path: Path,
 ) -> None:
@@ -250,7 +324,7 @@ def save_pr_curve(
         label=f"Class balance={baseline:.3f}",
     )
 
-    for model_name, model in models.items():
+    for model_name, model, x_test in model_entries:
         scores = get_scores(model, x_test)
         if scores is None:
             continue
@@ -271,17 +345,22 @@ def save_pr_curve(
 
 def save_error_analysis(
     model: Pipeline,
-    x_test: pd.Series,
+    x_test: Any,
     y_test: pd.Series,
     output_path: Path,
 ) -> None:
     """Save up to 10 false positives and 10 false negatives."""
     probabilities = model.predict_proba(x_test)[:, 1]
     predictions = model.predict(x_test)
+    text_values = (
+        x_test["text_combined"].reset_index(drop=True)
+        if isinstance(x_test, pd.DataFrame) and "text_combined" in x_test.columns
+        else pd.Series(x_test).reset_index(drop=True)
+    )
 
     errors = pd.DataFrame(
         {
-            "text_combined": x_test.reset_index(drop=True),
+            "text_combined": text_values,
             "true_label": y_test.reset_index(drop=True),
             "predicted_label": predictions,
             "phishing_probability": probabilities,
@@ -303,16 +382,21 @@ def save_error_analysis(
 
 def save_sample_predictions(
     model: Pipeline,
-    x_test: pd.Series,
+    x_test: Any,
     y_test: pd.Series,
     output_path: Path,
     sample_size: int = 20,
 ) -> None:
     """Save a small sample of Logistic Regression predictions."""
-    sample_texts = x_test.head(sample_size).reset_index(drop=True)
+    sample_x = x_test.head(sample_size) if hasattr(x_test, "head") else x_test[:sample_size]
+    sample_texts = (
+        sample_x["text_combined"].reset_index(drop=True)
+        if isinstance(sample_x, pd.DataFrame) and "text_combined" in sample_x.columns
+        else pd.Series(sample_x).reset_index(drop=True)
+    )
     true_labels = y_test.head(sample_size).reset_index(drop=True)
-    probabilities = model.predict_proba(sample_texts)[:, 1]
-    predictions = model.predict(sample_texts)
+    probabilities = model.predict_proba(sample_x)[:, 1]
+    predictions = model.predict(sample_x)
     risk_scores = probabilities * 100
 
     sample = pd.DataFrame(
@@ -504,7 +588,7 @@ def _base_holdout_row(
     """Create a source-holdout metrics row with common metadata."""
     return {
         "experiment": experiment,
-        "model": "logistic_regression",
+        "model": "logistic_regression_text_metadata",
         "status": status,
         "note": note,
         "train_rows": int(len(train_df)),
@@ -546,10 +630,10 @@ def evaluate_source_holdout(
         row["note"] = "training split does not contain at least two examples per class"
         return row
 
-    model = build_models()["logistic_regression"]
-    x_train = train_df["text_combined"]
+    model = build_text_metadata_models()["logistic_regression_text_metadata"]
+    x_train = build_model_input(train_df)
     y_train = train_df["label"]
-    x_test = test_df["text_combined"]
+    x_test = build_model_input(test_df)
     y_test = test_df["label"]
 
     model.fit(x_train, y_train)
@@ -603,7 +687,7 @@ def run_source_holdout_experiments(df: pd.DataFrame, results_dir: Path) -> pd.Da
             [
                 {
                     "experiment": "all",
-                    "model": "logistic_regression",
+                    "model": "logistic_regression_text_metadata",
                     "status": "skipped",
                     "note": "source_file column is missing",
                 }
@@ -645,77 +729,107 @@ def train_optimized(input_path: Path, results_dir: Path, models_dir: Path) -> No
 
     save_cleaned_duplicate_check(df, results_dir / "cleaned_duplicate_check.csv")
 
-    x = df["text_combined"]
+    x_all = build_model_input(df)
     y = df["label"]
 
-    x_train, x_test, y_train, y_test = train_test_split(
-        x,
+    x_train_all, x_test_all, y_train, y_test = train_test_split(
+        x_all,
         y,
         test_size=TEST_SIZE,
         stratify=y,
         random_state=RANDOM_STATE,
     )
+    x_train_text = x_train_all["text_combined"]
+    x_test_text = x_test_all["text_combined"]
 
-    print(f"Train rows: {len(x_train):,}")
-    print(f"Test rows: {len(x_test):,}")
+    print(f"Train rows: {len(x_train_all):,}")
+    print(f"Test rows: {len(x_test_all):,}")
 
     models = build_models()
-    metrics = []
+    text_metadata_models = build_text_metadata_models()
+    text_metrics = []
+    all_metrics = []
+    curve_entries: list[tuple[str, Pipeline, Any]] = []
 
     for model_name, model in models.items():
         print(f"Training {model_name}...")
-        model.fit(x_train, y_train)
-        metrics.append(evaluate_model(model_name, model, x_test, y_test))
+        model.fit(x_train_text, y_train)
+        row = evaluate_model(model_name, model, x_test_text, y_test)
+        text_metrics.append(row)
+        all_metrics.append(row)
+        curve_entries.append((model_name, model, x_test_text))
 
-    metrics_df = pd.DataFrame(metrics)
+    for model_name, model in text_metadata_models.items():
+        print(f"Training {model_name}...")
+        model.fit(x_train_all, y_train)
+        row = evaluate_model(model_name, model, x_test_all, y_test)
+        all_metrics.append(row)
+        curve_entries.append((model_name, model, x_test_all))
+
+    metrics_df = pd.DataFrame(text_metrics)
     metrics_path = results_dir / "metrics_optimized.csv"
     metrics_df.to_csv(metrics_path, index=False)
-    print(f"Saved model comparison metrics: {metrics_path}")
+    print(f"Saved text-only model comparison metrics: {metrics_path}")
 
-    save_confusion_matrix(
-        "naive_bayes",
-        models["naive_bayes"],
-        x_test,
+    all_metrics_df = pd.DataFrame(all_metrics)
+    text_metadata_metrics_path = results_dir / "metrics_text_metadata.csv"
+    all_metrics_df.to_csv(text_metadata_metrics_path, index=False)
+    print(f"Saved text + metadata comparison metrics: {text_metadata_metrics_path}")
+
+    for model_name, model, model_x_test in curve_entries:
+        save_confusion_matrix(
+            model_name,
+            model,
+            model_x_test,
+            y_test,
+            results_dir / f"{model_name}_confusion_matrix.png",
+        )
+
+    save_roc_curve(curve_entries, y_test, results_dir / "roc_curve_comparison.png")
+    save_pr_curve(curve_entries, y_test, results_dir / "pr_curve_comparison.png")
+    save_roc_curve(
+        curve_entries,
         y_test,
-        results_dir / "naive_bayes_confusion_matrix.png",
+        results_dir / "roc_curve_text_metadata_comparison.png",
     )
-    save_confusion_matrix(
-        "logistic_regression",
-        models["logistic_regression"],
-        x_test,
+    save_pr_curve(
+        curve_entries,
         y_test,
-        results_dir / "logistic_regression_confusion_matrix.png",
+        results_dir / "pr_curve_text_metadata_comparison.png",
     )
-    save_confusion_matrix(
-        "linear_svm",
-        models["linear_svm"],
-        x_test,
-        y_test,
-        results_dir / "linear_svm_confusion_matrix.png",
-    )
-    save_roc_curve(models, x_test, y_test, results_dir / "roc_curve_comparison.png")
-    save_pr_curve(models, x_test, y_test, results_dir / "pr_curve_comparison.png")
 
     logistic_model = models["logistic_regression"]
     save_near_duplicate_check(
         logistic_model.named_steps["tfidf"],
-        x_train,
-        x_test,
+        x_train_text,
+        x_test_text,
         results_dir / "near_duplicate_check.csv",
     )
-    save_error_analysis(logistic_model, x_test, y_test, results_dir / "error_samples.csv")
-    save_sample_predictions(logistic_model, x_test, y_test, results_dir / "sample_predictions.csv")
+    final_model = text_metadata_models["logistic_regression_text_metadata"]
+    save_error_analysis(final_model, x_test_all, y_test, results_dir / "error_samples.csv")
+    save_sample_predictions(final_model, x_test_all, y_test, results_dir / "sample_predictions.csv")
     save_global_indicators(logistic_model, results_dir, top_n=20)
     print(f"Saved global phishing indicators: {results_dir / 'top_phishing_indicators.csv'}")
     print(f"Saved global legitimate indicators: {results_dir / 'top_legitimate_indicators.csv'}")
+    save_text_metadata_explanations(final_model, x_test_all, y_test, results_dir, top_n=20)
+    print(
+        "Saved text + metadata explainability artifacts: "
+        f"{results_dir / 'sample_soc_explanation.json'}"
+    )
 
+    legacy_model_path = models_dir / LEGACY_TEXT_MODEL_NAME
     final_model_path = models_dir / FINAL_MODEL_NAME
-    joblib.dump(logistic_model, final_model_path)
+    random_forest_path = models_dir / RANDOM_FOREST_MODEL_NAME
+    joblib.dump(logistic_model, legacy_model_path)
+    joblib.dump(final_model, final_model_path)
+    joblib.dump(text_metadata_models["random_forest_text_metadata"], random_forest_path)
 
-    best_model = metrics_df.sort_values("f1", ascending=False).iloc[0]["model"]
+    best_model = all_metrics_df.sort_values("f1", ascending=False).iloc[0]["model"]
     print(f"Best F1 model: {best_model}")
-    print("Selected final explainable risk scoring model: logistic_regression")
-    print(f"Saved final Logistic Regression model: {final_model_path}")
+    print("Selected final explainable risk scoring model: logistic_regression_text_metadata")
+    print(f"Saved legacy text-only Logistic Regression model: {legacy_model_path}")
+    print(f"Saved final Logistic Regression text + metadata model: {final_model_path}")
+    print(f"Saved Random Forest text + metadata model: {random_forest_path}")
 
     train_cleaned_dedup_benchmark(df, results_dir)
     run_source_holdout_experiments(df, results_dir)

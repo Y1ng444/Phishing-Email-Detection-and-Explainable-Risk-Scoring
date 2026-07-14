@@ -13,7 +13,8 @@ RESULTS_DIR = PROJECT_ROOT / "results"
 MODELS_DIR = PROJECT_ROOT / "models"
 
 STANDARDIZED_DATA_PATH = PROCESSED_DATA_DIR / "phishing_email_standardized.csv"
-FINAL_MODEL_PATH = MODELS_DIR / "phishing_logreg_tfidf.pkl"
+LEGACY_TEXT_MODEL_PATH = MODELS_DIR / "phishing_logreg_tfidf.pkl"
+FINAL_MODEL_PATH = MODELS_DIR / "phishing_logreg_text_metadata.pkl"
 
 RANDOM_STATE = 42
 TEST_SIZE = 0.2

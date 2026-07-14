@@ -20,19 +20,19 @@ OUTPUT_COLUMNS = [
     "subject",
     "body",
     "urls",
-    "label",
     "text_combined",
+    "label",
 ]
 
 ENCODINGS = ["utf-8", "utf-8-sig", "cp1252", "latin1"]
 
 COLUMN_ALIASES = {
-    "sender": {"sender", "from", "from_email", "from_address"},
-    "receiver": {"receiver", "recipient", "to", "to_email", "to_address"},
+    "sender": {"sender", "from", "from_email", "from_address", "sender_email", "mail_from"},
+    "receiver": {"receiver", "recipient", "to", "to_email", "to_address", "receiver_email", "rcpt_to"},
     "date": {"date", "sent_date", "timestamp", "time"},
     "subject": {"subject", "email_subject"},
     "body": {"body", "message", "content", "email_body"},
-    "urls": {"urls", "url", "links", "link"},
+    "urls": {"urls", "url", "links", "link", "uri", "uris"},
     "label": {"label", "class", "target", "category", "type", "is_phishing"},
     "text_combined": {"text_combined", "text", "email_text", "email", "message_text"},
 }

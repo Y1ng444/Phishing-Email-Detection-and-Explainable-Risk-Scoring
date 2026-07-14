@@ -7,11 +7,12 @@ from typing import Any
 
 import joblib
 
+from .feature_engineering import build_model_input
 from .utils import FINAL_MODEL_PATH
 
 
 def load_model(model_path: str | Path = FINAL_MODEL_PATH) -> Any:
-    """Load the final Logistic Regression TF-IDF pipeline."""
+    """Load the final Logistic Regression text+metadata pipeline."""
     path = Path(model_path)
     if not path.exists():
         raise FileNotFoundError(
@@ -21,12 +22,21 @@ def load_model(model_path: str | Path = FINAL_MODEL_PATH) -> Any:
 
 
 def risk_level_from_score(risk_score: float) -> str:
-    """Map a 0-100 phishing score to a simple risk level."""
+    """Map a 0-100 phishing score to a SOC-friendly risk level."""
     if risk_score < 40:
-        return "Low risk"
+        return "Low"
     if risk_score < 70:
-        return "Medium risk"
-    return "High risk"
+        return "Medium"
+    if risk_score < 90:
+        return "High"
+    return "Critical"
+
+
+def _model_input(email_text: str, model: Any) -> Any:
+    """Build the expected inference input for supported pipeline shapes."""
+    if hasattr(model, "named_steps") and "features" in model.named_steps:
+        return build_model_input(email_text)
+    return [email_text]
 
 
 def score_email(email_text: str, model: Any | None = None) -> dict[str, float | int | str]:
@@ -37,8 +47,9 @@ def score_email(email_text: str, model: Any | None = None) -> dict[str, float | 
     if model is None:
         model = load_model()
 
-    predicted_label = int(model.predict([email_text])[0])
-    phishing_probability = float(model.predict_proba([email_text])[:, 1][0])
+    x_email = _model_input(email_text, model)
+    predicted_label = int(model.predict(x_email)[0])
+    phishing_probability = float(model.predict_proba(x_email)[:, 1][0])
     risk_score = phishing_probability * 100
 
     return {

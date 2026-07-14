@@ -61,7 +61,8 @@ This creates:
 data/processed/phishing_email_standardized.csv
 ```
 
-The standardized CSV includes `source_file`, `text_combined`, and `label`.
+The standardized CSV includes `source_file`, sender/receiver/date metadata,
+`subject`, `body`, `urls`, `text_combined`, and `label`.
 
 ## 5. Run EDA
 
@@ -86,10 +87,13 @@ results/top_terms_by_class.csv
 python train_optimized.py
 ```
 
-This trains Naive Bayes, Logistic Regression, and Linear SVM, then saves:
+This trains text-only and text+metadata models, then saves:
 
 ```text
+models/phishing_logreg_text_metadata.pkl
+models/phishing_random_forest_text_metadata.pkl
 models/phishing_logreg_tfidf.pkl
+results/metrics_text_metadata.csv
 results/metrics_optimized.csv
 results/metrics_cleaned_dedup.csv
 results/near_duplicate_check.csv
@@ -99,6 +103,10 @@ results/error_samples.csv
 results/sample_predictions.csv
 results/top_phishing_indicators.csv
 results/top_legitimate_indicators.csv
+results/top_phishing_indicators_text_metadata.csv
+results/top_legitimate_indicators_text_metadata.csv
+results/metadata_coefficients.csv
+results/sample_soc_explanation.json
 results/*_confusion_matrix.png
 results/roc_curve_comparison.png
 results/pr_curve_comparison.png
@@ -118,7 +126,7 @@ button, then click Analyze Email.
 
 ## Troubleshooting
 
-- If `app.py` cannot find `models/phishing_logreg_tfidf.pkl`, run
+- If `app.py` cannot find `models/phishing_logreg_text_metadata.pkl`, run
   `python train_optimized.py`.
 - If `train_optimized.py` cannot find
   `data/processed/phishing_email_standardized.csv`, run

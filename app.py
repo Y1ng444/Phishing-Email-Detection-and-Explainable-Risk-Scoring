@@ -7,11 +7,12 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from src.explainability import explain_email_prediction
+from src.explainability import explain_email_prediction, explain_metadata_prediction
 from src.risk_scoring import load_model, model_exists, score_email
+from src.utils import FINAL_MODEL_PATH
 
 
-MODEL_PATH = Path("models/phishing_logreg_tfidf.pkl")
+MODEL_PATH = FINAL_MODEL_PATH
 
 EXAMPLE_EMAIL = """Subject: Urgent account verification required
 
@@ -30,8 +31,8 @@ st.title("Phishing Email Detection")
 
 if not model_exists(MODEL_PATH):
     st.error(
-        "Model file not found. Please run python train_optimized.py first to train "
-        "and save the model."
+        "Text + metadata model file not found. Run the full workflow to generate "
+        f"`{MODEL_PATH}`."
     )
     st.code(
         "\n".join(
@@ -49,7 +50,7 @@ if not model_exists(MODEL_PATH):
 
 @st.cache_resource
 def get_model():
-    """Load the final Logistic Regression pipeline once."""
+    """Load the final Logistic Regression text+metadata pipeline once."""
     return load_model(MODEL_PATH)
 
 
@@ -79,6 +80,7 @@ if analyze:
 
     result = score_email(email_text, model)
     explanation = explain_email_prediction(email_text, model, top_n=10)
+    metadata_explanation = explain_metadata_prediction(email_text, model, top_n=10)
 
     st.subheader("Prediction")
     metrics = st.columns(4)
@@ -97,7 +99,19 @@ if analyze:
             hide_index=True,
         )
 
-metrics_path = Path("results/metrics_optimized.csv")
+    st.subheader("Metadata indicators")
+    if metadata_explanation.empty:
+        st.info("No metadata indicators are available for this model.")
+    else:
+        st.dataframe(
+            metadata_explanation[
+                ["feature", "raw_value", "coefficient", "contribution", "direction"]
+            ],
+            width="stretch",
+            hide_index=True,
+        )
+
+metrics_path = Path("results/metrics_text_metadata.csv")
 if metrics_path.exists():
     with st.expander("Model metrics"):
         metrics_df = pd.read_csv(metrics_path)

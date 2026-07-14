@@ -12,6 +12,7 @@ python train_optimized.py
 Typical generated files include:
 
 - `metrics_optimized.csv`
+- `metrics_text_metadata.csv`
 - `metrics_cleaned_dedup.csv`
 - `near_duplicate_check.csv`
 - `source_holdout_metrics.csv`
@@ -25,12 +26,21 @@ Typical generated files include:
 - `naive_bayes_confusion_matrix.png`
 - `logistic_regression_confusion_matrix.png`
 - `linear_svm_confusion_matrix.png`
+- `logistic_regression_text_metadata_confusion_matrix.png`
+- `random_forest_text_metadata_confusion_matrix.png`
 - `roc_curve_comparison.png`
 - `pr_curve_comparison.png`
+- `roc_curve_text_metadata_comparison.png`
+- `pr_curve_text_metadata_comparison.png`
 - `error_samples.csv`
 - `sample_predictions.csv`
 - `top_phishing_indicators.csv`
 - `top_legitimate_indicators.csv`
+- `top_phishing_indicators_text_metadata.csv`
+- `top_legitimate_indicators_text_metadata.csv`
+- `metadata_coefficients.csv`
+- `sample_soc_explanation.json`
+- `sample_soc_explanation.csv`
 
 Generated result files are not committed to GitHub because they are generated
 artifacts.
