@@ -48,8 +48,8 @@ def score_email(email_text: str, model: Any | None = None) -> dict[str, float | 
         model = load_model()
 
     x_email = _model_input(email_text, model)
-    predicted_label = int(model.predict(x_email)[0])
     phishing_probability = float(model.predict_proba(x_email)[:, 1][0])
+    predicted_label = int(phishing_probability >= 0.7)
     risk_score = phishing_probability * 100
 
     return {
