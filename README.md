@@ -27,6 +27,15 @@ False positives also matter because too many alerts create analyst and user
 fatigue. For that reason, the project focuses on Precision, Recall, F1,
 PR-AUC, ROC-AUC, and Confusion Matrix. Accuracy is reported only as supporting
 context.
+## Table of Contents
+- [Project Overview](#project-overview)
+- [Dataset](#dataset)
+- [Project Architecture](#project-architecture)
+- [Workflow Pipeline](#workflow-pipeline)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Features](#features)
+- [Model Performance](#model-performance)
 
 ## Dataset Placement
 
