@@ -198,6 +198,9 @@ See `HOW_TO_RUN.md` for setup from a clean environment.
 
 ## Limitations
 
+## Disclaimer
+
+This project is designed for educational and academic research purposes only. The risk scoring and machine learning predictions provided by this tool should not be used as a standalone production-grade email security gateway. Always rely on enterprise security solutions for live environments.
 - Random split metrics can be optimistic because of templates and near-duplicates.
 - Source-holdout performance is lower and should be treated as a stricter check.
 - Metadata availability differs by source, especially for Enron.
