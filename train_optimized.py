@@ -104,20 +104,40 @@ def make_vectorizer() -> TfidfVectorizer:
 
 
 def build_models() -> dict[str, Pipeline]:
-    """Create the baseline, improved, and comparison model pipelines."""
+    """
+    Create baseline and comparison model pipelines
+    with explicit regularization.
+    """
+
+    regularization_c = 0.5
+    nb_alpha = 1.0
+
     return {
         "naive_bayes": Pipeline(
             [
                 ("tfidf", make_vectorizer()),
-                ("clf", MultinomialNB()),
+                (
+                    "clf",
+                    MultinomialNB(
+                        # Laplace smoothing.
+                        # Larger alpha reduces the influence of rare words.
+                        alpha=nb_alpha,
+                    ),
+                ),
             ]
         ),
+
         "logistic_regression": Pipeline(
             [
                 ("tfidf", make_vectorizer()),
                 (
                     "clf",
                     LogisticRegression(
+                        # L2 regularization reduces excessively large
+                        # feature coefficients.
+                        penalty="l2",
+                        C=regularization_c,
+                        solver="lbfgs",
                         max_iter=1000,
                         class_weight="balanced",
                         random_state=RANDOM_STATE,
@@ -125,12 +145,17 @@ def build_models() -> dict[str, Pipeline]:
                 ),
             ]
         ),
+
         "linear_svm": Pipeline(
             [
                 ("tfidf", make_vectorizer()),
                 (
                     "clf",
                     LinearSVC(
+                        # L2 regularization for text features.
+                        penalty="l2",
+                        C=regularization_c,
+                        loss="squared_hinge",
                         class_weight="balanced",
                         max_iter=3000,
                         random_state=RANDOM_STATE,
