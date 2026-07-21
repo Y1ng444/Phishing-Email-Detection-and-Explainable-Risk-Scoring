@@ -1,4 +1,8 @@
 # Phishing Email Detection and Explainable Risk Scoring
+![Python](https://img.shields.io/badge/python-3.11+-blue.svg)
+![Streamlit](https://img.shields.io/badge/Streamlit-FF4B4B?logo=streamlit&logoColor=white)
+![Scikit-Learn](https://img.shields.io/badge/scikit--learn-%23F7931E.svg?logo=scikit-learn&logoColor=white)
+![License](https://img.shields.io/badge/license-Educational-green.svg)
 
 ## Project Overview
 
