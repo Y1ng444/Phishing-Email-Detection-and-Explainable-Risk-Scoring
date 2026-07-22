@@ -1,139 +1,196 @@
-# How to Run
+How to Run
 
-This repository keeps raw data, processed data, trained models, and generated
-results out of Git. Reproduce the project locally with the steps below.
+This repository excludes raw datasets, processed datasets, trained models, and generated evaluation outputs from Git.
 
-## 1. Create a Virtual Environment
+Follow the steps below to reproduce the project locally.
 
-Windows:
+1. Requirements
 
-```bash
-python -m venv .venv
-.venv\Scripts\activate
-```
+Recommended environment:
 
-macOS/Linux:
+Python 3.11 or newer
 
-```bash
-python -m venv .venv
+Verify Python:
+
+python --version
+
+On Windows, the command may also be:
+
+py --version
+2. Clone the Repository
+git clone https://github.com/Y1ng444/Phishing-Email-Detection-and-Explainable-Risk-Scoring.git
+cd Phishing-Email-Detection-and-Explainable-Risk-Scoring
+3. Create a Virtual Environment
+Windows PowerShell
+py -m venv .venv
+.venv\Scripts\Activate.ps1
+
+If PowerShell blocks script execution, run:
+
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.venv\Scripts\Activate.ps1
+Windows Command Prompt
+py -m venv .venv
+.venv\Scripts\activate.bat
+macOS or Linux
+python3 -m venv .venv
 source .venv/bin/activate
-```
-
-## 2. Install Dependencies
-
-```bash
+4. Install Dependencies
+python -m pip install --upgrade pip
 pip install -r requirements.txt
-```
+5. Add Raw Dataset Files
 
-## 3. Add Raw Dataset Files
+Place the course CSV files in:
 
-Place CSV files in:
-
-```text
 data/raw/
-```
 
-Expected course files:
+Expected file names:
 
-```text
 data/raw/CEAS_08.csv
 data/raw/Enron.csv
 data/raw/Nazario.csv
-```
 
-Supported schemas:
+Raw data is not included in the repository.
 
-- `subject,body,label`
-- `subject,body,label,urls`
-- `sender,receiver,date,subject,body,label,urls`
-- `sender,receiver,date,subject,body,urls,label`
-- `text_combined,label`
+The standardization script supports datasets containing combinations of fields such as:
 
-## 4. Standardize Datasets
+sender
+receiver
+date
+subject
+body
+urls
+text_combined
+label
 
-```bash
+Different column aliases are mapped to the canonical project schema automatically.
+
+6. Standardize the Datasets
+
+Run:
+
 python standardize_datasets.py
-```
 
-This creates:
+Output:
 
-```text
 data/processed/phishing_email_standardized.csv
-```
 
-The standardized CSV includes `source_file`, sender/receiver/date metadata,
-`subject`, `body`, `urls`, `text_combined`, and `label`.
+The standardized file contains:
 
-## 5. Run EDA
+source_file
+sender
+receiver
+date
+subject
+body
+urls
+text_combined
+label
+7. Run Exploratory Data Analysis
 
-```bash
+Run:
+
 python eda_standardized.py
-```
 
-This creates:
+Typical outputs include:
 
-```text
 results/class_distribution.png
 results/text_length_distribution.png
 results/missing_values.csv
 results/dataset_source_distribution.csv
 results/duplicate_statistics.csv
 results/top_terms_by_class.csv
-```
+8. Train and Evaluate the Models
 
-## 6. Train and Evaluate Models
+Run:
 
-```bash
 python train_optimized.py
-```
 
-This trains text-only and text+metadata models, then saves:
+This command:
 
-```text
+Loads the standardized dataset.
+Creates a stratified train/test split.
+Trains text-only models.
+Trains text-and-metadata models.
+Generates evaluation metrics.
+Saves confusion matrices.
+Saves ROC and Precision–Recall curves.
+Checks cleaned-text duplicates.
+Checks near-duplicate similarity.
+Runs cleaned-deduplicated benchmarks.
+Runs source-holdout experiments.
+Saves model-explanation files.
+Saves the trained pipelines.
+
+Generated model files:
+
 models/phishing_logreg_text_metadata.pkl
 models/phishing_random_forest_text_metadata.pkl
 models/phishing_logreg_tfidf.pkl
-results/metrics_text_metadata.csv
-results/metrics_optimized.csv
-results/metrics_cleaned_dedup.csv
-results/near_duplicate_check.csv
-results/source_holdout_metrics.csv
-results/cleaned_duplicate_check.csv
-results/error_samples.csv
-results/sample_predictions.csv
-results/top_phishing_indicators.csv
-results/top_legitimate_indicators.csv
-results/top_phishing_indicators_text_metadata.csv
-results/top_legitimate_indicators_text_metadata.csv
-results/metadata_coefficients.csv
-results/sample_soc_explanation.json
-results/*_confusion_matrix.png
-results/roc_curve_comparison.png
-results/pr_curve_comparison.png
-```
 
-On the full course dataset this step can take several minutes because it also
-runs robustness checks and source-holdout experiments.
+The training command can take longer on the full dataset because it includes multiple models and robustness checks.
 
-## 7. Launch the Streamlit Demo
+9. Launch the Streamlit Application
 
-```bash
+Run:
+
 streamlit run app.py
-```
 
-Open the local URL printed by Streamlit. Paste an email or use the example
-button, then click Analyze Email.
+Open the local URL printed in the terminal.
 
-## Troubleshooting
+The application normally starts at:
 
-- If `app.py` cannot find `models/phishing_logreg_text_metadata.pkl`, run
-  `python train_optimized.py`.
-- If `train_optimized.py` cannot find
-  `data/processed/phishing_email_standardized.csv`, run
-  `python standardize_datasets.py`.
-- If `standardize_datasets.py` finds no CSV files, confirm the raw CSV files are
-  inside `data/raw/`.
-- If imports fail, activate the virtual environment and run
-  `pip install -r requirements.txt`.
-- If Streamlit does not start, confirm `streamlit` is installed in the active
-  environment.
+http://localhost:8501
+
+Paste an email into the text area and select the analysis button.
+
+10. Recommended Execution Order
+python standardize_datasets.py
+python eda_standardized.py
+python train_optimized.py
+streamlit run app.py
+11. Troubleshooting
+No raw CSV files found
+
+Confirm that the files are inside:
+
+data/raw/
+Standardized dataset not found
+
+Run:
+
+python standardize_datasets.py
+Final model not found
+
+Run:
+
+python train_optimized.py
+
+Confirm that this file exists:
+
+models/phishing_logreg_text_metadata.pkl
+Import error
+
+Activate the virtual environment and reinstall dependencies:
+
+pip install -r requirements.txt
+Streamlit command not found
+
+Run:
+
+python -m streamlit run app.py
+PowerShell activation error
+
+Run:
+
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+
+Then activate the environment again.
+
+Model loading error after changing library versions
+
+Delete the generated model files and retrain:
+
+python train_optimized.py
+
+Joblib model files may require a compatible scikit-learn version.

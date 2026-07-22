@@ -1,191 +1,284 @@
 # Phishing Email Detection and Explainable Risk Scoring
-![Python](https://img.shields.io/badge/python-3.11+-blue.svg)
-![Streamlit](https://img.shields.io/badge/Streamlit-FF4B4B?logo=streamlit&logoColor=white)
-![Scikit-Learn](https://img.shields.io/badge/scikit--learn-%23F7931E.svg?logo=scikit-learn&logoColor=white)
-![License](https://img.shields.io/badge/license-Educational-green.svg)
 
-## Project Overview
+![Python](https://img.shields.io/badge/Python-Machine%20Learning-blue.svg)
+![Streamlit](https://img.shields.io/badge/Streamlit-Application-FF4B4B?logo=streamlit\&logoColor=white)
+![Scikit-learn](https://img.shields.io/badge/scikit--learn-Modeling-F7931E?logo=scikit-learn\&logoColor=white)
+![Purpose](https://img.shields.io/badge/Purpose-Educational-green.svg)
 
-This project is an end-to-end AI for Cybersecurity pipeline for phishing email
-detection. It standardizes raw email datasets, performs EDA, trains classical ML
-models, evaluates phishing detection quality beyond accuracy, and serves a
-Streamlit demo with explainable risk scoring for SOC-style review.
+An end-to-end machine-learning project for detecting phishing or suspicious email content and generating explainable risk scores.
 
-The current final model is Logistic Regression with TF-IDF text features plus
-engineered metadata features. It is selected because it supports
-`predict_proba()` for risk scoring and has coefficients for explainability.
+The project standardizes multiple email datasets, performs exploratory data analysis, extracts TF-IDF and security-related metadata features, compares several classical machine-learning models, and provides a Streamlit application for single-email analysis.
+
+The selected deployment model is **Logistic Regression with TF-IDF and metadata features** because it supports probability-based risk scoring and coefficient-based explanations.
+
+---
+
+## Project Workflow
+
+```text
+Raw email CSV files
+        ↓
+Dataset standardization
+        ↓
+Exploratory data analysis
+        ↓
+Text cleaning
+        ↓
+TF-IDF and metadata extraction
+        ↓
+Model training and evaluation
+        ↓
+Risk scoring and explainability
+        ↓
+Streamlit application
+```
+
+---
 
 ## Security Task
 
-Binary labels:
+The project uses binary classification:
 
-- `0` = legitimate / benign email
-- `1` = phishing email
+| Label | Meaning                      |
+| ----: | ---------------------------- |
+|   `0` | Legitimate or benign email   |
+|   `1` | Phishing or suspicious email |
 
-False negatives are high risk because missed phishing emails can reach users.
-False positives also matter because too many alerts create analyst and user
-fatigue. For that reason, the project focuses on Precision, Recall, F1,
-PR-AUC, ROC-AUC, and Confusion Matrix. Accuracy is reported only as supporting
-context.
-## Table of Contents
-- [Project Overview](#project-overview)
-- [Dataset](#dataset)
-- [Project Architecture](#project-architecture)
-- [Workflow Pipeline](#workflow-pipeline)
-- [Installation](#installation)
-- [Usage](#usage)
-- [Features](#features)
-- [Model Performance](#model-performance)
+During dataset standardization, positive labels such as `phishing`, `spam`, `malicious`, and similar values are mapped to class `1`.
 
-## Dataset Placement
+Therefore, the positive class may contain spam or other malicious messages in addition to confirmed credential-phishing emails.
 
-Place the course CSV files in:
+The project evaluates models using:
+
+* Precision
+* Recall
+* F1 score
+* ROC-AUC
+* PR-AUC / Average Precision
+* Confusion Matrix
+* Accuracy as supporting information
+
+---
+
+## Project Structure
+
+```text
+.
+├── data/
+│   ├── raw/
+│   ├── processed/
+│   └── README.md
+├── models/
+│   └── README.md
+├── results/
+│   └── README.md
+├── src/
+│   ├── explainability.py
+│   ├── feature_engineering.py
+│   ├── risk_scoring.py
+│   ├── text_cleaning.py
+│   └── utils.py
+├── app.py
+├── eda_standardized.py
+├── standardize_datasets.py
+├── train_optimized.py
+├── requirements.txt
+├── HOW_TO_RUN.md
+└── REPORT.md
+```
+
+### Main files
+
+| File                         | Purpose                                                 |
+| ---------------------------- | ------------------------------------------------------- |
+| `standardize_datasets.py`    | Standardizes dataset schemas, labels, and email content |
+| `eda_standardized.py`        | Performs exploratory data analysis                      |
+| `train_optimized.py`         | Trains, evaluates, explains, and saves the models       |
+| `app.py`                     | Runs the Streamlit application                          |
+| `src/text_cleaning.py`       | Cleans and normalizes email text                        |
+| `src/feature_engineering.py` | Extracts metadata features                              |
+| `src/explainability.py`      | Calculates feature contributions                        |
+| `src/risk_scoring.py`        | Generates predictions, risk scores, and risk levels     |
+
+---
+
+## Dataset
+
+Place the following course dataset files in:
 
 ```text
 data/raw/
 ```
 
-Expected files:
+Expected file names:
 
 ```text
-data/raw/CEAS_08.csv
-data/raw/Enron.csv
-data/raw/Nazario.csv
+CEAS_08.csv
+Enron.csv
+Nazario.csv
 ```
 
-`standardize_datasets.py` writes:
+Raw and processed datasets are not included in the repository.
+
+Run:
+
+```bash
+python standardize_datasets.py
+```
+
+The standardized dataset is written to:
 
 ```text
 data/processed/phishing_email_standardized.csv
 ```
 
-The standardized CSV preserves these canonical columns when available:
+The canonical output fields are:
 
 ```text
-source_file, sender, receiver, date, subject, body, urls, text_combined, label
+source_file
+sender
+receiver
+date
+subject
+body
+urls
+text_combined
+label
 ```
 
-## Eight-Stage ML for Security Pipeline
+---
 
-1. Data collection: raw CEAS, Enron, and Nazario CSV files.
-2. Data standardization: schema normalization and label mapping.
-3. EDA: class balance, missing values, source distribution, text lengths, terms.
-4. Preprocessing: HTML stripping, URL/email/number normalization, whitespace cleanup.
-5. Feature engineering: TF-IDF unigrams/bigrams plus metadata features.
-6. Modeling: Naive Bayes, Logistic Regression, Linear SVM, and Random Forest.
-7. Evaluation: Precision, Recall, F1, PR-AUC, ROC-AUC, and Confusion Matrix.
-8. Risk scoring + Explainability: probability-based score and coefficient reasons.
+## Text Preprocessing
 
-## Features
+Text preprocessing is implemented in:
 
-Text branch:
+```text
+src/text_cleaning.py
+```
 
-- `TfidfVectorizer(preprocessor=clean_text)`
-- Unigram + bigram features
-- `max_features=20000`, `min_df=2`, `max_df=0.95`, `sublinear_tf=True`
+The cleaning process:
 
-Metadata branch:
+* Decodes HTML entities.
+* Converts text to lowercase.
+* Removes HTML tags.
+* Replaces URLs with `url`.
+* Replaces email addresses with `email`.
+* Replaces numbers with `num`.
+* Removes unsupported characters.
+* Normalizes whitespace.
 
-- `n_links`
-- `has_ip_url`
-- `html_tag_count`
-- `html_ratio`
-- `body_len`
-- `subject_len`
-- `n_exclamation`
-- `n_upper_words`
-- `sender_has_email`
-- `url_count_from_column`
+The current cleaning rule mainly supports English text because only lowercase letters from `a` to `z` are retained after normalization.
 
-The text+metadata models use sklearn `Pipeline` and `ColumnTransformer`, so the
-TF-IDF vectorizer, SVD transformer, and scaler are fit only on the train split.
-This avoids train/test leakage.
+---
+
+## Feature Engineering
+
+### TF-IDF text features
+
+The project uses word unigrams and bigrams.
+
+```python
+TfidfVectorizer(
+    preprocessor=clean_text,
+    analyzer="word",
+    ngram_range=(1, 2),
+    max_features=30000,
+    min_df=2,
+    max_df=0.95,
+    sublinear_tf=True,
+    norm="l2",
+    smooth_idf=True,
+)
+```
+
+### Metadata features
+
+The final model also uses:
+
+* `n_links`
+* `has_ip_url`
+* `html_tag_count`
+* `html_ratio`
+* `body_len`
+* `subject_len`
+* `n_exclamation`
+* `n_upper_words`
+* `sender_has_email`
+* `url_count_from_column`
+
+Metadata features are standardized with `StandardScaler`.
+
+---
 
 ## Models
 
-- `naive_bayes`: text-only baseline.
-- `logistic_regression`: text-only explainable baseline.
-- `linear_svm`: strong text-only comparison model.
-- `logistic_regression_text_metadata`: final explainable risk scoring model.
-- `random_forest_text_metadata`: improved tree model using SVD-compressed text
-  features plus metadata.
+The project compares:
 
-Generated model files:
+1. Multinomial Naive Bayes
+2. Text-only Logistic Regression
+3. Linear Support Vector Machine
+4. Logistic Regression with text and metadata
+5. Random Forest with compressed text and metadata
+
+The selected deployment model is:
+
+```text
+logistic_regression_text_metadata
+```
+
+It is saved as:
 
 ```text
 models/phishing_logreg_text_metadata.pkl
-models/phishing_random_forest_text_metadata.pkl
-models/phishing_logreg_tfidf.pkl
 ```
 
-## Risk Scoring
+Linear SVM is included as a strong comparison model, but it does not provide `predict_proba()` directly.
+
+---
+
+## Risk Scoring and Explainability
+
+The application converts the model probability into a risk score:
 
 ```text
-risk_score = P(phishing) * 100
+risk_score = P(phishing) × 100
 ```
 
 Risk levels:
 
-- Low: score < 40
-- Medium: 40 <= score < 70
-- High: 70 <= score < 90
-- Critical: score >= 90
+|          Score | Level    |
+| -------------: | -------- |
+|       Below 40 | Low      |
+| 40 to below 70 | Medium   |
+| 70 to below 90 | High     |
+|   90 or higher | Critical |
 
-Single-email explanations use:
-
-```text
-contribution = transformed_feature_value * Logistic Regression coefficient
-```
-
-Text indicators and metadata contributions are shown separately.
-
-## Latest Local Run Summary
-
-Using the local raw CSV files currently present in `data/raw/`, standardization
-produced 69,941 usable rows:
-
-- Legitimate: 32,763
-- Phishing: 37,178
-- Sources: CEAS_08.csv, Enron.csv, Nazario.csv
-
-Random split results from `results/metrics_text_metadata.csv`:
-
-| Model | Accuracy | Precision | Recall | F1 | ROC-AUC | PR-AUC |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Naive Bayes | 0.9578 | 0.9901 | 0.9299 | 0.9591 | 0.9961 | 0.9960 |
-| Logistic Regression | 0.9862 | 0.9857 | 0.9884 | 0.9870 | 0.9990 | 0.9991 |
-| Linear SVM | 0.9912 | 0.9915 | 0.9919 | 0.9917 | 0.9994 | 0.9994 |
-| Logistic Regression + metadata | 0.9874 | 0.9862 | 0.9902 | 0.9882 | 0.9990 | 0.9991 |
-| Random Forest + metadata | 0.9846 | 0.9842 | 0.9870 | 0.9856 | 0.9988 | 0.9989 |
-
-The final explainable model is `logistic_regression_text_metadata`. It improves
-random-split Recall and F1 over the text-only Logistic Regression while keeping
-probability output and coefficient-based explanations.
-
-The near-duplicate check still found many high-similarity random-split test
-emails, so random split metrics should be treated as optimistic. Source-holdout
-results are stricter and show that cross-source generalization remains a real
-limitation.
-
-## Key Generated Results
+The application classifies an email as phishing when:
 
 ```text
-results/metrics_text_metadata.csv
-results/metrics_optimized.csv
-results/metrics_cleaned_dedup.csv
-results/source_holdout_metrics.csv
-results/near_duplicate_check.csv
-results/*_confusion_matrix.png
-results/roc_curve_text_metadata_comparison.png
-results/pr_curve_text_metadata_comparison.png
-results/top_phishing_indicators_text_metadata.csv
-results/top_legitimate_indicators_text_metadata.csv
-results/metadata_coefficients.csv
-results/sample_soc_explanation.json
-results/sample_soc_explanation.csv
+P(phishing) >= 0.70
 ```
 
-## How to Run
+Logistic Regression explanations use:
+
+```text
+contribution = transformed feature value × model coefficient
+```
+
+Positive contributions push the prediction toward the positive class. Negative contributions push it toward the legitimate class.
+
+---
+
+## Installation and Usage
+
+Create and activate a virtual environment, then install the dependencies:
+
+```bash
+python -m venv .venv
+pip install -r requirements.txt
+```
+
+Run the project in this order:
 
 ```bash
 python standardize_datasets.py
@@ -194,16 +287,79 @@ python train_optimized.py
 streamlit run app.py
 ```
 
-See `HOW_TO_RUN.md` for setup from a clean environment.
+Detailed setup and troubleshooting instructions are available in:
+
+```text
+HOW_TO_RUN.md
+```
+
+Technical explanations and evaluation methodology are available in:
+
+```text
+REPORT.md
+```
+
+---
+
+## Generated Artifacts
+
+The scripts generate files inside:
+
+```text
+data/processed/
+models/
+results/
+```
+
+Typical artifacts include:
+
+* Standardized datasets
+* Trained model pipelines
+* Classification metrics
+* Confusion matrices
+* ROC and Precision–Recall curves
+* Duplicate and near-duplicate checks
+* Source-holdout evaluation
+* Error samples
+* Model coefficients
+* Example explanations
+
+Generated artifacts are excluded from Git and must be created locally.
+
+---
 
 ## Limitations
 
+* The positive class may contain spam or other malicious emails in addition to phishing.
+* Similar email templates may occur in both training and testing data.
+* Random train/test splits may produce optimistic results.
+* Performance may decrease on previously unseen dataset sources.
+* Metadata availability differs between datasets.
+* Model probabilities are not separately calibrated.
+* The application threshold differs from the default Logistic Regression evaluation threshold.
+* Text preprocessing mainly supports English email content.
+* The system does not inspect attachments.
+* The system does not fully analyze email headers.
+* The system does not verify SPF, DKIM, or DMARC.
+* The system does not query live URL, domain, or sender reputation services.
+* The application does not connect directly to Gmail or Outlook.
+* The application does not quarantine or delete messages.
+
+---
+
 ## Disclaimer
 
-This project is designed for educational and academic research purposes only. The risk scoring and machine learning predictions provided by this tool should not be used as a standalone production-grade email security gateway. Always rely on enterprise security solutions for live environments.
-- Random split metrics can be optimistic because of templates and near-duplicates.
-- Source-holdout performance is lower and should be treated as a stricter check.
-- Metadata availability differs by source, especially for Enron.
-- The model does not inspect attachments, headers, sender reputation, or live URL reputation.
-- Probability scores are not separately calibrated.
-- This is a course prototype, not a production email security gateway.
+This project is intended for educational and academic research purposes.
+
+The predictions, probabilities, risk levels, and explanations must not be used as a standalone production email-security system.
+
+A legitimate prediction does not guarantee that an email is safe, and a phishing prediction does not prove that an email is malicious.
+
+Production environments should combine machine-learning detection with secure email gateways, email authentication, threat intelligence, URL and attachment scanning, endpoint protection, and human analyst review.
+
+---
+
+## About
+
+**Course:** AIC211
+**Project:** Phishing Email Detection and Explainable Risk Scoring

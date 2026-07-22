@@ -1,40 +1,72 @@
-# Data
+Data Directory
 
-The dataset is not included in this GitHub repository because raw and processed
-email datasets can be large. Keep the repository lightweight by storing data
-locally.
+Raw and processed email datasets are stored locally in this directory.
 
-Place raw CSV files in:
+Datasets are not committed to Git because they may be large and may have separate usage conditions.
 
-```text
+Directory Structure
+data/
+├── raw/
+├── processed/
+└── README.md
+Raw Data
+
+Place the course CSV files in:
+
 data/raw/
-```
 
-Supported schemas:
+Expected file names:
 
-- `subject,body,label`
-- `subject,body,label,urls`
-- `sender,receiver,date,subject,body,label,urls`
-- `sender,receiver,date,subject,body,urls,label`
-- `text_combined,label`
+CEAS_08.csv
+Enron.csv
+Nazario.csv
 
-Run standardization with:
+The standardization script supports different column names for fields such as:
 
-```bash
+sender
+receiver
+date
+subject
+body
+urls
+text_combined
+label
+
+It also supports several common CSV encodings.
+
+Processed Data
+
+Generate the standardized dataset with:
+
 python standardize_datasets.py
-```
 
-The standardized dataset will be generated locally at:
+Output:
 
-```text
 data/processed/phishing_email_standardized.csv
-```
 
-The final required columns are:
+Canonical columns:
 
-```text
-source_file,text_combined,label
-```
+source_file
+sender
+receiver
+date
+subject
+body
+urls
+text_combined
+label
 
-`source_file` is used for source-holdout evaluation, for example training on
-CEAS + Enron and testing on Nazario.
+The training pipeline requires:
+
+text_combined
+label
+
+The source_file field is used for source-holdout evaluation.
+
+Other fields are used for metadata feature extraction when available.
+
+Important Notes
+Do not commit private or sensitive email data.
+Review the usage conditions of each dataset.
+Do not place API keys, passwords, or .env files in this directory.
+Re-run standardization whenever the raw datasets or label mapping change.
