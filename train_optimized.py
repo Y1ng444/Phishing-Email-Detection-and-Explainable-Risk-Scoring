@@ -92,14 +92,17 @@ def load_training_data(input_path: Path) -> pd.DataFrame:
 
 
 def make_vectorizer() -> TfidfVectorizer:
-    """Create the shared TF-IDF unigram and bigram vectorizer."""
+    """Create TF-IDF features for phishing email classification."""
     return TfidfVectorizer(
         preprocessor=clean_text,
+        analyzer="word",
         ngram_range=(1, 2),
-        max_features=20000,
+        max_features=30000,
         min_df=2,
         max_df=0.95,
         sublinear_tf=True,
+        norm="l2",
+        smooth_idf=True,
     )
 
 
